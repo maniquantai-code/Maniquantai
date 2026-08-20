@@ -1,2 +1,2 @@
-# Keep backend out of the Vercel Next.js frontend deployment
-backend/
+# Backend is deployed as the FastAPI Vercel service.
+# Keep this file free of backend/ exclusions.
