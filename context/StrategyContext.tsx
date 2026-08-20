@@ -1,6 +1,6 @@
 "use client";
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { getAccessToken } from "@/lib/supabase";
+import { supabase, getAccessToken } from "@/lib/supabase";
 
 export interface StrategySummary {
   strategy_id: string;
@@ -24,6 +24,14 @@ interface StrategyContextValue {
 
 const StrategyContext = createContext<StrategyContextValue | null>(null);
 
+function deriveStrategyName(rawText: string): string {
+  const text = rawText.trim().replace(/\s+/g, " ");
+  const matches = text.match(/\b(?:BTC\s*\/\s*USD|ETH\s*\/\s*USD|[A-Z]{2,6}\s*\/\s*[A-Z]{2,6}|(?:EMA|SMA|RSI|ATR|MACD)\s*\(?\d+(?:\.\d+)?\)?)\b/gi) ?? [];
+  const identifiers = [...new Set(matches.map((m) => m.toUpperCase().replace(/\s+/g, "")))];
+  if (identifiers.length) return identifiers.slice(0, 3).join(" ").slice(0, 48);
+  return text.split(/\s+/).slice(0, 6).join(" ").slice(0, 48) || "Untitled Strategy";
+}
+
 export function StrategyProvider({ children }: { children: ReactNode }) {
   const [strategies, setStrategies] = useState<StrategySummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -35,135 +43,77 @@ export function StrategyProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     try {
       const token = await getAccessToken();
-      if (!token) {
-        setStrategies([]);
-        setSelectedId(null);
-        return;
-      }
+      if (!token) { setStrategies([]); setSelectedId(null); return; }
 
-      const res = await fetch("/api/strategies", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error("Failed to fetch strategies");
+      const { data, error } = await supabase
+        .from("strategies")
+        .select("strategy_id,name,status,fast_track,heightened_monitoring_day,heightened_monitoring_total,raw_strategy_text,created_at")
+        .eq("user_id", (await supabase.auth.getUser()).data.user?.id ?? "")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
 
-      const data = await res.json();
-      const userStrategies = Array.isArray(data) ? data : [];
+      const userStrategies = (data ?? []) as StrategySummary[];
       setStrategies(userStrategies);
-      setSelectedId((current) =>
-        current && userStrategies.some((s: StrategySummary) => s.strategy_id === current)
-          ? current
-          : userStrategies[0]?.strategy_id ?? null
-      );
+      setSelectedId((current) => current && userStrategies.some((s) => s.strategy_id === current) ? current : userStrategies[0]?.strategy_id ?? null);
     } catch {
       setStrategies([]);
       setSelectedId(null);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
-  useEffect(() => {
-    fetchStrategies();
-  }, []);
+  useEffect(() => { void fetchStrategies(); }, []);
 
   async function createStrategy(rawText: string) {
     setCreating(true);
     setCreateError(null);
     try {
-      const token = await getAccessToken();
-      if (!token) throw new Error("Please sign in before creating a strategy.");
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData.user;
+      if (!user) throw new Error("Please sign in before creating a strategy.");
 
-      const res = await fetch("/api/strategies", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ raw_strategy_text: rawText }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          err.detail?.error === "quota_exceeded"
-            ? `Out of credits for this action (needs ${err.detail.cost}, you have ${err.detail.balance}).`
-            : typeof err.detail === "string"
-              ? err.detail
-              : "Couldn't create the strategy. Is the backend running?"
-        );
-      }
-
-      const data = await res.json();
-
-      // IMPORTANT: do not wait for a second GET request before opening the
-      // dashboard. The POST already returned the durable strategy record.
-      // Optimistically insert it and select it immediately so ChatPanel and
-      // the rest of the dashboard render without a race with the GET.
-      const created: StrategySummary = {
-        strategy_id: data.strategy_id,
-        name: data.name || "Untitled Strategy",
-        status: data.status || "draft",
-        fast_track: Boolean(data.fast_track),
-        heightened_monitoring_day: data.heightened_monitoring_day ?? null,
-        heightened_monitoring_total: data.heightened_monitoring_total ?? null,
-        raw_strategy_text: rawText,
+      const strategyId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const name = deriveStrategyName(rawText);
+      const payload = {
+        strategy_id: strategyId,
+        user_id: user.id,
+        name,
+        raw_strategy_text: rawText.trim(),
+        status: "draft",
+        fast_track: false,
+        heightened_monitoring_day: null,
+        heightened_monitoring_total: null,
+        created_at: now,
+        updated_at: now,
       };
 
-      setStrategies((current) => [
-        created,
-        ...current.filter((s) => s.strategy_id !== created.strategy_id),
-      ]);
-      setSelectedId(created.strategy_id);
+      const { data, error } = await supabase
+        .from("strategies")
+        .insert(payload)
+        .select("strategy_id,name,status,fast_track,heightened_monitoring_day,heightened_monitoring_total,raw_strategy_text")
+        .single();
 
-      // Refresh in the background for any server-side fields, but never block
-      // the UI transition on this request.
-      void fetchStrategiesPreservingSelection(created.strategy_id);
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "Something went wrong.");
-      throw e;
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function fetchStrategiesPreservingSelection(createdId: string) {
-    try {
-      const token = await getAccessToken();
-      if (!token) return;
-      const res = await fetch("/api/strategies", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      if (!Array.isArray(data)) return;
-
-      setStrategies((current) => {
-        const serverStrategies = data as StrategySummary[];
-        const merged = [...serverStrategies];
-        for (const local of current) {
-          if (!merged.some((s) => s.strategy_id === local.strategy_id)) merged.push(local);
+      if (error) {
+        if (error.code === "23503") {
+          throw new Error("Your profile is not ready yet. Please sign out and sign in again, then retry.");
         }
-        return merged;
-      });
-      setSelectedId(createdId);
-    } catch {
-      // The strategy is already saved and visible locally; a background
-      // refresh failure must not take the user back to the empty state.
-    }
+        if (error.code === "42501") {
+          throw new Error("Your account is not authorized to create strategies. Please refresh and sign in again.");
+        }
+        throw new Error(error.message || "Could not save strategy.");
+      }
+
+      const created = data as StrategySummary;
+      setStrategies((current) => [created, ...current.filter((s) => s.strategy_id !== created.strategy_id)]);
+      setSelectedId(created.strategy_id);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : "Could not save strategy.");
+      throw e;
+    } finally { setCreating(false); }
   }
 
   return (
-    <StrategyContext.Provider
-      value={{
-        strategies,
-        selectedId,
-        selectStrategy: setSelectedId,
-        loading,
-        createStrategy,
-        creating,
-        createError,
-      }}
-    >
+    <StrategyContext.Provider value={{ strategies, selectedId, selectStrategy: setSelectedId, loading, createStrategy, creating, createError }}>
       {children}
     </StrategyContext.Provider>
   );
