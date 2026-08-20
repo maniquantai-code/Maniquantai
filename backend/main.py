@@ -1,17 +1,12 @@
-"""
-ManiQuantAI Backend — FastAPI entry point.
-Run: uvicorn backend.main:app --reload --port 8000
-"""
+"""ManiQuantAI Backend — FastAPI entry point."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .core.health_monitor import run_health_monitor
 from .routers import (
     llm_router,
     chat_router,
@@ -31,7 +26,6 @@ app = FastAPI(
     description="AI-assisted crypto trading platform backend.",
 )
 
-# CORS — allow the Next.js frontend (and local dev)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -44,7 +38,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
 app.include_router(llm_router)
 app.include_router(chat_router)
 app.include_router(strategies_router)
@@ -60,12 +53,3 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Launch the background health monitor when the server starts."""
-    asyncio.create_task(run_health_monitor())
-    logging.getLogger("main").info(
-        "ManiQuantAI backend started — LLM health monitor running."
-    )
