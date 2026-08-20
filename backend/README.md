@@ -14,9 +14,10 @@ The router keeps trading workflows alive 24/7 by:
 
 | Priority | Model | Size | Reasoning |
 |---|---|---|---|
-| 1 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 550B | ✅ |
-| 2 | `nvidia/nemotron-3.5-lightning:free` | — | ✅ |
-| 3 | `google/gemma-4-26b-a4b-it:free` | 26B | ❌ |
+| 1 | `openai/gpt-oss-20b:free` | 20B | ✅ |
+| 2 | `nvidia/nemotron-3-ultra-550b-a55b:free` | 550B | ✅ |
+| 3 | `nvidia/nemotron-3.5-lightning:free` | — | ✅ |
+| 4 | `google/gemma-4-26b-a4b-it:free` | 26B | ❌ |
 | Future | `anthropic/claude-sonnet-4-6` | — | ✅ |
 
 ## Setup

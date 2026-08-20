@@ -5,9 +5,10 @@ Keeps trading workflows running 24/7 by automatically routing to the best
 available free model via OpenRouter, with circuit-breaker fallback.
 
 Priority order (all free, via OpenRouter):
-  1. nvidia/nemotron-3-ultra-550b-a55b   (best reasoning, largest)
-  2. nvidia/nemotron-3.5-lightning        (fast, good reasoning)
-  3. google/gemma-4-26b-a4b-it            (solid fallback)
+  1. openai/gpt-oss-20b                  (fast, strong reasoning, first choice)
+  2. nvidia/nemotron-3-ultra-550b-a55b   (largest, deep reasoning fallback)
+  3. nvidia/nemotron-3.5-lightning        (fast, good reasoning)
+  4. google/gemma-4-26b-a4b-it            (solid last-resort fallback)
 
 Claude is reserved as a future paid tier — slot is pre-wired.
 """
@@ -48,15 +49,23 @@ class ModelConfig:
     priority: int = 0          # lower = tried first
 
 
-# Ordered by priority (0 = best)
+# Ordered by priority (0 = tried first)
 MODEL_REGISTRY: list[ModelConfig] = [
+    ModelConfig(
+        model_id="openai/gpt-oss-20b:free",
+        display_name="GPT-OSS 20B",
+        tier=ModelTier.FREE_OSS,
+        supports_reasoning=True,
+        timeout_s=60.0,
+        priority=0,
+    ),
     ModelConfig(
         model_id="nvidia/nemotron-3-ultra-550b-a55b:free",
         display_name="Nemotron Ultra 550B",
         tier=ModelTier.FREE_OSS,
         supports_reasoning=True,
         timeout_s=90.0,
-        priority=0,
+        priority=1,
     ),
     ModelConfig(
         model_id="nvidia/nemotron-3.5-lightning:free",
@@ -64,7 +73,7 @@ MODEL_REGISTRY: list[ModelConfig] = [
         tier=ModelTier.FREE_OSS,
         supports_reasoning=True,
         timeout_s=45.0,
-        priority=1,
+        priority=2,
     ),
     ModelConfig(
         model_id="google/gemma-4-26b-a4b-it:free",
@@ -72,7 +81,7 @@ MODEL_REGISTRY: list[ModelConfig] = [
         tier=ModelTier.FREE_OSS,
         supports_reasoning=False,
         timeout_s=45.0,
-        priority=2,
+        priority=3,
     ),
     # --- Future paid tier (not active yet) ---
     # ModelConfig(
