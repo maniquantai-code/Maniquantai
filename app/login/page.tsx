@@ -68,7 +68,6 @@ export default function LoginPage() {
           </>}
           <input type="email" required placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-text-faint outline-none focus:border-accent" />
           <input type="password" required minLength={8} placeholder="Password (8+ characters)" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text placeholder:text-text-faint outline-none focus:border-accent" />
-          {mode === "signup" && <p className="text-xs text-text-faint">Your password is securely managed by Supabase Auth and is never stored in your profile table.</p>}
           {error && <p className="text-sm text-danger">{error}</p>}
           <button type="submit" disabled={loading} className="w-full rounded-lg bg-accent py-2 text-sm font-medium text-bg disabled:opacity-50">{loading ? "Please wait…" : mode === "signin" ? "Sign in" : "Sign up"}</button>
         </form>
