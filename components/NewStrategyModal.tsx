@@ -55,8 +55,8 @@ export function NewStrategyModal({ open, onClose }: { open: boolean; onClose: ()
           )}
 
           <p className="mt-2 text-xs text-text-faint">
-            This will go through Research → Backtest → Paper Trading before any real capital is
-            at risk. Every strategy needs a stop-loss and position sizing.
+            Strategy creation is instant. The pipeline then runs Research → Backtest → Paper Trading
+            before any real capital is at risk. Every strategy needs a stop-loss and position sizing.
           </p>
 
           <div className="mt-4 flex justify-end gap-2">
@@ -72,7 +72,7 @@ export function NewStrategyModal({ open, onClose }: { open: boolean; onClose: ()
               disabled={creating || !text.trim()}
               className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg disabled:opacity-40"
             >
-              {creating ? "Analyzing…" : "Start research"}
+              {creating ? "Starting…" : "Start research"}
             </button>
           </div>
         </form>
