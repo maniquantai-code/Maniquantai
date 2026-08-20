@@ -46,7 +46,12 @@ async def get_current_user(
             detail="Invalid or expired token",
         )
 
-    return resp.json()
+    # Keep the verified access token available to downstream Supabase REST
+    # calls. This lets user-scoped endpoints work with RLS without requiring
+    # a service-role key in the deployment environment.
+    user = resp.json()
+    user["_access_token"] = token
+    return user
 
 
 async def get_optional_user(
