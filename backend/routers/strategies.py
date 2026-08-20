@@ -1,21 +1,22 @@
 """
 /api/strategies — CRUD for trading strategies.
-Uses the LLM router to kick off research when a strategy is created.
+Strategy creation is intentionally fast: naming is deterministic and does
+not wait on an LLM. LLM work belongs to the actual research/agent pipeline,
+not to the initial save operation.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import get_current_user
-from ..core.llm_router import router as llm_router
-
-import httpx
 
 api_router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
@@ -30,6 +31,37 @@ def _sb_headers():
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
+
+
+def _derive_strategy_name(raw_text: str) -> str:
+    """Create a useful strategy label locally without an LLM round-trip."""
+    text = re.sub(r"\s+", " ", raw_text.strip())
+    if not text:
+        return "Untitled Strategy"
+
+    # Prefer the most useful trading identifiers when present.
+    identifiers: list[str] = []
+    for pattern in (
+        r"\bBTC\s*/?\s*USD\b",
+        r"\bETH\s*/?\s*USD\b",
+        r"\b[A-Z]{2,6}\s*/\s*[A-Z]{2,6}\b",
+        r"\b\d+(?:\.\d+)?\s*(?:EMA|SMA|RSI|ATR|MACD)\b",
+        r"\b(?:EMA|SMA|RSI|ATR|MACD)\s*\(?\d+(?:\.\d+)?\)?\b",
+    ):
+        for match in re.findall(pattern, text, flags=re.IGNORECASE):
+            value = re.sub(r"\s+", " ", match).strip()
+            if value and value.lower() not in {x.lower() for x in identifiers}:
+                identifiers.append(value.upper())
+
+    # Keep the label short enough for the strategy selector.
+    if identifiers:
+        label = " ".join(identifiers[:3])
+        if len(label) <= 48:
+            return label
+
+    words = re.findall(r"[A-Za-z0-9/%.-]+", text)
+    label = " ".join(words[:6]).strip(" .,-")
+    return label[:48] or "Untitled Strategy"
 
 
 class CreateStrategyRequest(BaseModel):
@@ -56,40 +88,23 @@ async def create_strategy(
     user=Depends(get_current_user),
 ):
     user_id = user["id"]
+    raw_text = req.raw_strategy_text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="Strategy text cannot be empty")
+
     strategy_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
+    strategy_name = _derive_strategy_name(raw_text)
 
-    # 1. Ask LLM to parse & name the strategy
-    try:
-        parse_result = await llm_router.chat(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Parse this trading strategy and return a short name (max 6 words) "
-                        f"and a one-sentence summary.\n\nStrategy: {req.raw_strategy_text}\n\n"
-                        f"Reply in JSON: {{\"name\": \"...\", \"summary\": \"...\"}}"
-                    ),
-                }
-            ],
-            require_json=True,
-            max_tokens=128,
-            temperature=0.1,
-        )
-        import json, re
-        raw = parse_result["content"]
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        parsed = json.loads(match.group()) if match else {}
-        strategy_name = parsed.get("name", req.raw_strategy_text[:50])
-    except Exception:
-        strategy_name = req.raw_strategy_text[:50]
-
-    # 2. Save to Supabase
+    # IMPORTANT: do not call the LLM here. This endpoint is the hot path
+    # behind the New Strategy modal and should return as soon as the durable
+    # strategy record exists. Research/Backtest/Paper stages should run as
+    # an asynchronous workflow after creation.
     payload = {
         "strategy_id": strategy_id,
         "user_id": user_id,
         "name": strategy_name,
-        "raw_strategy_text": req.raw_strategy_text,
+        "raw_strategy_text": raw_text,
         "status": "draft",
         "fast_track": False,
         "heightened_monitoring_day": None,
@@ -111,4 +126,10 @@ async def create_strategy(
             detail=f"Could not save strategy: {resp.text[:200]}",
         )
 
-    return {"strategy_id": strategy_id, "name": strategy_name, "status": "draft"}
+    return {
+        "strategy_id": strategy_id,
+        "name": strategy_name,
+        "status": "draft",
+        "pipeline_started": False,
+        "message": "Strategy saved. Start the asynchronous research pipeline next.",
+    }
