@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+// Prefer an explicit backend URL when provided. Otherwise use the FastAPI
+// service mounted at /backend in the same Vercel deployment.
+const BACKEND_URL =
+  process.env.BACKEND_URL ||
+  (process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}/backend`
+    : "http://localhost:8000");
 
 async function proxy(req: NextRequest, method: string) {
   const path = req.nextUrl.pathname;
@@ -19,16 +25,21 @@ async function proxy(req: NextRequest, method: string) {
     try {
       init.body = JSON.stringify(await req.json());
     } catch {
+      // Empty body is valid for some requests.
     }
   }
 
   try {
-    const res = await fetch(`${BACKEND_URL}${path}${search}`, init);
+    const backendPath = `${BACKEND_URL}${path}${search}`;
+    const res = await fetch(backendPath, init, { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });
   } catch {
     return NextResponse.json(
-      { error: "backend_unreachable", detail: "Make sure the FastAPI server is running." },
+      {
+        error: "backend_unreachable",
+        detail: "FastAPI backend could not be reached.",
+      },
       { status: 502 }
     );
   }
