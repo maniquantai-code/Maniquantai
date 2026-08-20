@@ -36,32 +36,78 @@ export function ChatPanel({
     setInput("");
     setSending(true);
 
+    const assistantTimestamp = new Date().toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
     try {
       const token = await getAccessToken();
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "text/event-stream",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ strategy_id: strategyId, message: userMsg.content }),
       });
-      const data = await res.json();
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: data.reply ?? "Sorry, something went wrong on my end.",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
+
+      if (!res.ok || !res.body) {
+        throw new Error(`Chat request failed (${res.status})`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistantText = "";
+      let assistantAdded = false;
+
+      const upsertAssistant = (text: string) => {
+        setMessages((current) => {
+          const withoutLive = assistantAdded ? current.slice(0, -1) : current;
+          assistantAdded = true;
+          return [
+            ...withoutLive,
+            {
+              role: "assistant",
+              content: text,
+              timestamp: assistantTimestamp,
+            },
+          ];
+        });
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const event of events) {
+          const line = event.split("\n").find((item) => item.startsWith("data:"));
+          if (!line) continue;
+          const payload = JSON.parse(line.slice(5).trim());
+          if (payload.type === "delta") {
+            assistantText += payload.content ?? "";
+            upsertAssistant(assistantText);
+          } else if (payload.type === "error") {
+            throw new Error(payload.message ?? "AI request failed");
+          }
+        }
+      }
+
+      if (!assistantAdded) {
+        upsertAssistant("I couldn't generate a response. Please try again.");
+      }
     } catch {
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
-          content: "Couldn't reach the backend. Is it running on port 8000?",
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          content: "Couldn't reach the AI service. Please try again.",
+          timestamp: assistantTimestamp,
         },
       ]);
     } finally {
@@ -100,7 +146,7 @@ export function ChatPanel({
         {sending && (
           <div className="flex justify-start">
             <div className="rounded-lg border border-border bg-bg-panel px-4 py-2.5 text-sm text-text-faint">
-              Thinking…
+              Generating…
             </div>
           </div>
         )}
