@@ -1,11 +1,16 @@
 """
-/api/chat — strategy chat endpoint consumed by the frontend ChatPanel.
-Uses the LLM router so it always uses the best available free model.
+/api/chat — fast strategy chat endpoint consumed by the frontend ChatPanel.
+
+The response is streamed as Server-Sent Events so the user sees the first
+model tokens immediately instead of waiting for the full completion.
 """
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..core.llm_router import router as llm_router
@@ -14,15 +19,16 @@ from .auth import get_current_user
 api_router = APIRouter(prefix="/api", tags=["chat"])
 
 SYSTEM_PROMPT = """You are Vela, ManiQuantAI's trading assistant.
-You help users understand their algorithmic trading strategies — backtests,
-paper trading results, drawdown, win rates, and risk metrics.
+You help users understand algorithmic trading strategies, backtests,
+paper-trading results, drawdown, win rates, and risk metrics.
 
-Rules you always follow:
+Rules:
 1. Never guarantee profits or specific returns.
-2. Always mention both win rate AND avg win/loss ratio together — never one without the other.
-3. Flag suspicious backtest results (e.g. >85% win rate, <1% drawdown).
+2. Always mention both win rate AND avg win/loss ratio together when discussing results.
+3. Flag suspicious backtest results.
 4. Be concise, precise, and honest.
-5. If you don't know something, say so — don't fabricate numbers.
+5. Never invent numbers.
+6. For a strategy request, give a short acknowledgement and focus on the next pipeline step.
 """
 
 
@@ -36,20 +42,24 @@ async def strategy_chat(
     req: ChatRequest,
     user=Depends(get_current_user),
 ):
-    try:
-        result = await llm_router.chat(
-            messages=[{"role": "user", "content": req.message}],
-            system_prompt=SYSTEM_PROMPT,
-            max_tokens=1024,
-            temperature=0.3,
-        )
-        return {
-            "reply": result["content"],
-            "model_used": result["model_display"],
-            "attempts": result.get("attempts", 1),
-        }
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="All AI models are temporarily unavailable. Trading execution continues — chat will resume shortly.",
-        )
+    async def event_stream():
+        try:
+            async for event in llm_router.stream_chat(
+                messages=[{"role": "user", "content": req.message}],
+                system_prompt=SYSTEM_PROMPT,
+                max_tokens=384,
+                temperature=0.2,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except RuntimeError as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
