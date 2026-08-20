@@ -24,10 +24,22 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
-def _sb_headers():
+def _sb_headers(access_token: str | None = None):
+    """Use the user's JWT for RLS-scoped strategy operations.
+
+    A service-role key remains supported as an optional fallback for existing
+    deployments, but strategy CRUD should not fail merely because that secret
+    is absent: the strategies table already has authenticated-user RLS.
+    """
+    token = access_token or SUPABASE_SERVICE_KEY
+    if not token:
+        raise HTTPException(
+            status_code=500,
+            detail="Supabase database credentials are not configured",
+        )
     return {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey": SUPABASE_SERVICE_KEY or os.getenv("SUPABASE_ANON_KEY", ""),
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -39,7 +51,6 @@ def _derive_strategy_name(raw_text: str) -> str:
     if not text:
         return "Untitled Strategy"
 
-    # Prefer the most useful trading identifiers when present.
     identifiers: list[str] = []
     for pattern in (
         r"\bBTC\s*/?\s*USD\b",
@@ -53,7 +64,6 @@ def _derive_strategy_name(raw_text: str) -> str:
             if value and value.lower() not in {x.lower() for x in identifiers}:
                 identifiers.append(value.upper())
 
-    # Keep the label short enough for the strategy selector.
     if identifiers:
         label = " ".join(identifiers[:3])
         if len(label) <= 48:
@@ -71,10 +81,11 @@ class CreateStrategyRequest(BaseModel):
 @api_router.get("")
 async def list_strategies(user=Depends(get_current_user)):
     user_id = user["id"]
+    access_token = user.get("_access_token")
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/strategies",
-            headers=_sb_headers(),
+            headers=_sb_headers(access_token),
             params={"user_id": f"eq.{user_id}", "order": "created_at.desc"},
         )
     if not resp.is_success:
@@ -88,6 +99,7 @@ async def create_strategy(
     user=Depends(get_current_user),
 ):
     user_id = user["id"]
+    access_token = user.get("_access_token")
     raw_text = req.raw_strategy_text.strip()
     if not raw_text:
         raise HTTPException(status_code=400, detail="Strategy text cannot be empty")
@@ -116,7 +128,7 @@ async def create_strategy(
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{SUPABASE_URL}/rest/v1/strategies",
-            headers=_sb_headers(),
+            headers=_sb_headers(access_token),
             json=payload,
         )
 
@@ -130,6 +142,9 @@ async def create_strategy(
         "strategy_id": strategy_id,
         "name": strategy_name,
         "status": "draft",
+        "fast_track": False,
+        "heightened_monitoring_day": None,
+        "heightened_monitoring_total": None,
         "pipeline_started": False,
         "message": "Strategy saved. Start the asynchronous research pipeline next.",
     }
