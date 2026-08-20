@@ -23,36 +23,11 @@ interface StrategyContextValue {
 
 const StrategyContext = createContext<StrategyContextValue | null>(null);
 
-const DEMO_STRATEGIES: StrategySummary[] = [
-  {
-    strategy_id: "demo-eurusd",
-    name: "EUR/USD Mean Reversion",
-    status: "paper_trade",
-    fast_track: true,
-    heightened_monitoring_day: 4,
-    heightened_monitoring_total: 14,
-  },
-  {
-    strategy_id: "demo-btc",
-    name: "BTC Momentum Breakout",
-    status: "pending_backtest",
-    fast_track: false,
-    heightened_monitoring_day: null,
-    heightened_monitoring_total: null,
-  },
-  {
-    strategy_id: "demo-eth-rsi",
-    name: "ETH RSI Reversal",
-    status: "backtest_failed",
-    fast_track: false,
-    heightened_monitoring_day: null,
-    heightened_monitoring_total: null,
-  },
-];
-
 export function StrategyProvider({ children }: { children: ReactNode }) {
-  const [strategies, setStrategies] = useState<StrategySummary[]>(DEMO_STRATEGIES);
-  const [selectedId, setSelectedId] = useState<string | null>(DEMO_STRATEGIES[0].strategy_id);
+  // Only authenticated /api/strategies results are shown here.
+  // No demo/sample strategies are seeded into the selector.
+  const [strategies, setStrategies] = useState<StrategySummary[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -62,19 +37,27 @@ export function StrategyProvider({ children }: { children: ReactNode }) {
     try {
       const token = await getAccessToken();
       if (!token) {
-        setLoading(false);
+        setStrategies([]);
+        setSelectedId(null);
         return;
       }
+
       const res = await fetch("/api/strategies", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Failed to fetch strategies");
+
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
-        setStrategies(data);
-        setSelectedId(data[0].strategy_id);
-      }
+      const userStrategies = Array.isArray(data) ? data : [];
+      setStrategies(userStrategies);
+      setSelectedId((current) =>
+        current && userStrategies.some((s: StrategySummary) => s.strategy_id === current)
+          ? current
+          : userStrategies[0]?.strategy_id ?? null
+      );
     } catch {
+      setStrategies([]);
+      setSelectedId(null);
     } finally {
       setLoading(false);
     }
