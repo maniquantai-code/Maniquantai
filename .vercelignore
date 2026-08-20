@@ -1,1 +1,2 @@
+# Keep backend out of the Vercel Next.js frontend deployment
 backend/
