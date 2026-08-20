@@ -94,24 +94,65 @@ def _metrics(trades):
     al = abs(sum(losses) / len(losses)) if losses else 0
     return {"trade_count": len(trades), "wins": len(wins), "losses": len(losses), "win_rate": round(len(wins) * 100 / len(trades), 2) if trades else 0, "net_return_pct": round((eq - 1) * 100, 2), "max_drawdown_pct": round(dd * 100, 2), "avg_win_pct": round(aw * 100, 3), "avg_loss_pct": round(al * 100, 3), "win_loss_ratio": round(aw / al, 3) if al else None}
 
+async def _binance_data(symbol: str, interval: str, start: int, end: int):
+    rows = []
+    async with httpx.AsyncClient(timeout=20) as c:
+        cursor = start
+        while cursor < end and len(rows) < 20000:
+            r = await c.get("https://api.binance.com/api/v3/klines", params={"symbol": symbol.replace('/', ''), "interval": interval, "startTime": cursor, "endTime": end, "limit": 1000})
+            if r.status_code in (401, 403, 451):
+                raise RuntimeError(f"BINANCE_UNAVAILABLE_{r.status_code}")
+            r.raise_for_status()
+            b = r.json()
+            if not b: break
+            rows += [(int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4])) for x in b]
+            cursor = int(b[-1][0]) + 1
+            if len(b) < 1000: break
+    return rows
+
+async def _coinbase_data(symbol: str, interval: str, start: int, end: int):
+    if interval != "15m":
+        raise RuntimeError("Coinbase fallback currently supports 15-minute crypto candles only")
+    product = symbol.replace("/USDT", "-USD").replace("/USD", "-USD")
+    step = 900
+    rows = []
+    async with httpx.AsyncClient(timeout=20) as c:
+        cursor = start
+        while cursor < end and len(rows) < 20000:
+            chunk_end = min(end, cursor + step * 300)
+            r = await c.get(f"https://api.exchange.coinbase.com/products/{product}/candles", params={"granularity": step, "start": datetime.fromtimestamp(cursor / 1000, timezone.utc).isoformat(), "end": datetime.fromtimestamp(chunk_end / 1000, timezone.utc).isoformat()})
+            if r.status_code in (401, 403, 404):
+                raise RuntimeError(f"COINBASE_DATA_UNAVAILABLE_{r.status_code}")
+            r.raise_for_status()
+            b = r.json()
+            for x in b:
+                rows.append((int(float(x[0]) * 1000), float(x[3]), float(x[2]), float(x[1]), float(x[4])))
+            cursor = chunk_end
+    rows.sort(key=lambda x: x[0])
+    dedup = []
+    seen = set()
+    for row in rows:
+        if row[0] not in seen:
+            seen.add(row[0]); dedup.append(row)
+    return dedup
+
 async def _data(symbol: str, interval: str, days: int):
     if symbol == "EUR/USD":
         raise RuntimeError("EUR/USD requires an FX market-data provider")
     end = int(datetime.now(timezone.utc).timestamp() * 1000)
     start = end - days * 86400000
-    rows = []
-    async with httpx.AsyncClient(timeout=20) as c:
-        while start < end and len(rows) < 20000:
-            r = await c.get("https://api.binance.com/api/v3/klines", params={"symbol": symbol.replace('/', ''), "interval": interval, "startTime": start, "endTime": end, "limit": 1000})
-            r.raise_for_status()
-            b = r.json()
-            if not b: break
-            rows += [(int(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4])) for x in b]
-            start = int(b[-1][0]) + 1
-            if len(b) < 1000: break
+    try:
+        rows = await _binance_data(symbol, interval, start, end)
+        provider = "binance"
+    except Exception as primary_exc:
+        try:
+            rows = await _coinbase_data(symbol, interval, start, end)
+            provider = "coinbase"
+        except Exception as fallback_exc:
+            raise RuntimeError(f"Market data unavailable: Binance failed ({primary_exc}); Coinbase fallback failed ({fallback_exc})")
     if not rows:
         raise RuntimeError("No historical market data was returned")
-    return rows
+    return rows, provider
 
 def _backtest(rows, spec):
     closes = [x[4] for x in rows]
@@ -161,8 +202,9 @@ async def run_pipeline(strategy_id: str, user_id: str, token: str):
     state["agents"]["backtest"] = "running"
     await _save(strategy_id, user_id, token, state, "backtesting")
     try:
-        rows = await _data(spec["symbol"], spec["timeframe"], spec["lookback_days"])
+        rows, provider = await _data(spec["symbol"], spec["timeframe"], spec["lookback_days"])
         metrics = _backtest(rows, spec)
+        metrics["data_provider"] = provider
     except Exception as exc:
         state["pipeline_stage"] = "backtest_failed"
         state["agents"]["backtest"] = "failed"
