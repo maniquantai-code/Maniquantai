@@ -22,24 +22,34 @@ api_router = APIRouter(prefix="/api/strategies", tags=["strategies"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_ANON_KEY = os.getenv(
+    "SUPABASE_ANON_KEY",
+    os.getenv(
+        "SUPABASE_PUBLISHABLE_KEY",
+        "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
+    ),
+)
 
 
 def _sb_headers(access_token: str | None = None):
-    """Use the user's JWT for RLS-scoped strategy operations.
+    """Build valid Supabase REST headers for either RLS or service-role access.
 
-    A service-role key remains supported as an optional fallback for existing
-    deployments, but strategy CRUD should not fail merely because that secret
-    is absent: the strategies table already has authenticated-user RLS.
+    When a user JWT is available, Authorization uses that JWT so the request
+    remains RLS-scoped. The `apikey` header must still always contain a
+    Supabase project API key; a user access token is not a replacement for it.
     """
-    token = access_token or SUPABASE_SERVICE_KEY
-    if not token:
+    authorization_token = access_token or SUPABASE_SERVICE_KEY
+    apikey = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
+
+    if not authorization_token or not apikey:
         raise HTTPException(
             status_code=500,
             detail="Supabase database credentials are not configured",
         )
+
     return {
-        "apikey": SUPABASE_SERVICE_KEY or os.getenv("SUPABASE_ANON_KEY", ""),
-        "Authorization": f"Bearer {token}",
+        "apikey": apikey,
+        "Authorization": f"Bearer {authorization_token}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
