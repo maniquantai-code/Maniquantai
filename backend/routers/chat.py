@@ -75,10 +75,7 @@ async def _save_state(strategy_id: str, user_id: str, token: str, spec: dict, st
         resp = await client.patch(
             f"{SUPABASE_URL}/rest/v1/strategies",
             headers=_headers(token),
-            params={
-                "strategy_id": f"eq.{strategy_id}",
-                "user_id": f"eq.{user_id}",
-            },
+            params={"strategy_id": f"eq.{strategy_id}", "user_id": f"eq.{user_id}"},
             json=payload,
         )
     if not resp.is_success:
@@ -102,6 +99,10 @@ def _is_paper(text: str) -> bool:
     return "paper trading" in value or "paper trade" in value
 
 
+def _is_paper_launch(text: str) -> bool:
+    return _norm(text) in {"do paper trade", "start paper trade", "launch paper trading", "launch paper trade"}
+
+
 def _looks_like_backtest_request(text: str) -> bool:
     value = _norm(text)
     return "backtest" in value or ("last 90 days" in value and "btc" in value)
@@ -122,7 +123,6 @@ def _strategy_context(strategy: dict, state: dict) -> str:
 
 
 def _deterministic_action(message: str, state: dict) -> tuple[str | None, str | None]:
-    """Return (action, response) without an LLM for workflow commands."""
     text = _norm(message)
     pending = state.get("pending_confirmation")
 
@@ -139,14 +139,7 @@ def _deterministic_action(message: str, state: dict) -> tuple[str | None, str | 
         state["pending_confirmation"] = None
         return "approve", "Approved. Gate 3 is passed for this strategy. The next pipeline stage is paper trading, using the saved strategy configuration."
 
-    if _is_paper(text):
-        if state.get("approved"):
-            state["pipeline_stage"] = "paper_ready"
-            state["pending_confirmation"] = "paper_launch"
-            return "paper_ready", "Paper trading is ready for the approved strategy. Say “do paper trade” and I’ll launch the saved configuration without asking for the strategy details again."
-        return None, "Paper trading is gated until the strategy has passed backtesting and received human approval."
-
-    if text in {"do paper trade", "start paper trade", "launch paper trading", "launch paper trade"} and state.get("approved"):
+    if _is_paper_launch(text) and state.get("approved"):
         now = datetime.now(timezone.utc).isoformat()
         session = {
             "status": "running",
@@ -161,6 +154,13 @@ def _deterministic_action(message: str, state: dict) -> tuple[str | None, str | 
         state["pipeline_stage"] = "paper_trading"
         state["pending_confirmation"] = None
         return "paper_launch", "Paper trading launched using the saved strategy configuration. Initial capital is the platform paper default of $10,000, risk is 1% per trade, and max concurrent positions is 1. No live capital is used."
+
+    if _is_paper(text):
+        if state.get("approved"):
+            state["pipeline_stage"] = "paper_ready"
+            state["pending_confirmation"] = "paper_launch"
+            return "paper_ready", "Paper trading is ready for the approved strategy. Say “do paper trade” and I’ll launch the saved configuration without asking for the strategy details again."
+        return None, "Paper trading is gated until the strategy has passed backtesting and received human approval."
 
     if _looks_like_backtest_request(message):
         state["pipeline_stage"] = "backtest_ready"
@@ -199,11 +199,7 @@ async def strategy_chat(req: ChatRequest, user=Depends(get_current_user)):
 
     async def event_stream():
         try:
-            async for event in llm_router.stream_chat(
-                messages=messages,
-                max_tokens=256,
-                temperature=0.1,
-            ):
+            async for event in llm_router.stream_chat(messages=messages, max_tokens=256, temperature=0.1):
                 yield f"data: {json.dumps(event)}\n\n"
         except RuntimeError as exc:
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
