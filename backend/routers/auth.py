@@ -7,30 +7,29 @@ from __future__ import annotations
 import os
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
 import httpx
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 SUPABASE_URL = os.getenv(
     "SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co"
-)
+).rstrip("/")
 SUPABASE_ANON_KEY = os.getenv(
     "SUPABASE_ANON_KEY",
     "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
-)
+).strip()
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict:
-    if credentials is None:
+    if credentials is None or not credentials.credentials.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication token",
         )
 
-    token = credentials.credentials
+    token = credentials.credentials.strip()
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/auth/v1/user",
@@ -46,10 +45,11 @@ async def get_current_user(
             detail="Invalid or expired token",
         )
 
-    # Keep the verified access token available to downstream Supabase REST
-    # calls. This lets user-scoped endpoints work with RLS without requiring
-    # a service-role key in the deployment environment.
     user = resp.json()
+    # Keep the verified token in two explicit fields. Some downstream code
+    # serializes user dictionaries, so use a plain field name as the canonical
+    # value and retain the underscored alias for backwards compatibility.
+    user["access_token"] = token
     user["_access_token"] = token
     return user
 
@@ -57,7 +57,6 @@ async def get_current_user(
 async def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict | None:
-    """Like get_current_user but returns None instead of raising for unauthenticated requests."""
     if credentials is None:
         return None
     try:
