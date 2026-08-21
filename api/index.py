@@ -1,8 +1,8 @@
 """Vercel Python entrypoint for the ManiQuantAI FastAPI backend.
 
 The frontend and backend share one Vercel project. Vercel routes /api/* to
-this function, while FastAPI itself owns the /api/... endpoints. The route
-capture is passed as __path so the function preserves the original API path.
+this function. The FastAPI routers use /api/... prefixes, while health/docs
+are mounted at the backend root, so the wrapper restores the right path.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 from urllib.parse import parse_qsl, urlencode
 
 from backend.main import app as _fastapi_app
+
+_ROOT_ROUTES = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
 
 
 async def app(scope, receive, send):
@@ -24,11 +26,14 @@ async def app(scope, receive, send):
             else:
                 kept.append((key, value))
 
-        # Vercel rewrites /api/<path> to /api/index.py?__path=/<path>.
-        # Restore the original FastAPI path before dispatching.
         if target is not None:
             if not target.startswith("/"):
                 target = "/" + target
+            # Vercel captures /api/<path> as <path>. Most ManiQuantAI API
+            # routers are mounted under /api, while health/docs are root paths.
+            if target not in _ROOT_ROUTES and not target.startswith("/api/"):
+                target = "/api" + target
+
             scope = dict(scope)
             scope["path"] = target
             scope["raw_path"] = target.encode("utf-8")
