@@ -89,7 +89,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, user=Depends
             state["pending_confirmation"] = None
             state["error"] = "MetaTrader 5 connection required before research/backtesting can start"
             action = "connect_mt5"
-            response = "Before I start the research or backtest, connect your MetaTrader 5 account in Settings → Brokers. ManiQuantAI will use your MT5 market data first; Yahoo Finance is used only if the connected MT5 feed fails. Coinbase and Binance are not used."
+            response = "Before I start the research or backtest, connect your MetaTrader 5 account in Settings → Brokers."
             await save(req.strategy_id, user["id"], token, state, "awaiting_mt5")
         else:
             state["pipeline_stage"] = "research_queued"
