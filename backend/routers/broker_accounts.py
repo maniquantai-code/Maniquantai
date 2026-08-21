@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 
 import httpx
@@ -23,6 +24,7 @@ api_router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+logger = logging.getLogger(__name__)
 
 
 def _fernet() -> Fernet:
@@ -38,10 +40,10 @@ def _fernet() -> Fernet:
 
 
 def _sb_headers(access_token: str | None = None):
-    # Prefer the service role for server-side writes. If it is not configured,
-    # use the verified user's Supabase access token so RLS can authorize the
-    # user's own broker_accounts row instead of failing with a generic save error.
-    token = SUPABASE_SERVICE_ROLE_KEY or (access_token or "")
+    """Build PostgREST headers without ever sending an empty Bearer value."""
+    service_key = SUPABASE_SERVICE_ROLE_KEY.strip()
+    user_token = (access_token or "").strip()
+    token = service_key or user_token
     if not token:
         raise HTTPException(status_code=503, detail="Trading account storage is not configured")
     return {
@@ -50,6 +52,11 @@ def _sb_headers(access_token: str | None = None):
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
+
+
+def _user_token(user: dict) -> str | None:
+    # access_token is canonical; _access_token remains for older callers.
+    return (user.get("access_token") or user.get("_access_token") or "").strip() or None
 
 
 def _encrypt(payload: dict) -> str:
@@ -67,17 +74,23 @@ class MT5ConnectRequest(BaseModel):
 @api_router.get("")
 async def list_accounts(user=Depends(get_current_user)):
     user_id = user["id"]
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{SUPABASE_URL}/rest/v1/broker_accounts",
-            headers=_sb_headers(user.get("_access_token")),
-            params={
-                "user_id": f"eq.{user_id}",
-                "select": "id,connector_type,connector_name,label,created_at,last_verified_at",
-                "order": "created_at.desc",
-            },
-        )
+    try:
+        headers = _sb_headers(_user_token(user))
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{SUPABASE_URL}/rest/v1/broker_accounts",
+                headers=headers,
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "select": "id,connector_type,connector_name,label,created_at,last_verified_at",
+                    "order": "created_at.desc",
+                },
+            )
+    except httpx.RequestError as exc:
+        logger.exception("MT5 account list request failed")
+        raise HTTPException(status_code=502, detail="Trading account storage could not be reached") from exc
     if not resp.is_success:
+        logger.error("MT5 account list failed: status=%s body=%s user=%s", resp.status_code, resp.text[:1000], user_id)
         raise HTTPException(status_code=502, detail="Could not fetch trading accounts")
     return resp.json()
 
@@ -93,10 +106,9 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
             "server": req.server.strip(),
         })
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="MT5 connection storage is not configured yet") from exc
+        logger.exception("MT5 encryption setup failed")
+        raise HTTPException(status_code=503, detail="Trading account storage is not configured yet") from exc
 
-    # Let Postgres generate the UUID. This avoids unnecessary client-side key
-    # handling and keeps the insert aligned with the live schema.
     payload = {
         "user_id": user_id,
         "connector_type": "mt5",
@@ -106,20 +118,21 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
     }
 
     try:
+        headers = _sb_headers(_user_token(user))
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 f"{SUPABASE_URL}/rest/v1/broker_accounts",
-                headers=_sb_headers(user.get("_access_token")),
+                headers=headers,
                 json=payload,
             )
+    except HTTPException:
+        raise
     except httpx.RequestError as exc:
+        logger.exception("MT5 broker account storage request failed")
         raise HTTPException(status_code=502, detail="Trading account storage could not be reached") from exc
 
     if not resp.is_success:
-        # Log the real Supabase response server-side, but do not expose the
-        # response body because it can contain implementation details.
-        import logging
-        logging.getLogger(__name__).error(
+        logger.error(
             "MT5 broker_accounts insert failed: status=%s body=%s user=%s",
             resp.status_code, resp.text[:1000], user_id,
         )
@@ -136,12 +149,16 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
 @api_router.delete("/{account_id}")
 async def disconnect_account(account_id: str, user=Depends(get_current_user)):
     user_id = user["id"]
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.delete(
-            f"{SUPABASE_URL}/rest/v1/broker_accounts",
-            headers=_sb_headers(user.get("_access_token")),
-            params={"id": f"eq.{account_id}", "user_id": f"eq.{user_id}"},
-        )
+    try:
+        headers = _sb_headers(_user_token(user))
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.delete(
+                f"{SUPABASE_URL}/rest/v1/broker_accounts",
+                headers=headers,
+                params={"id": f"eq.{account_id}", "user_id": f"eq.{user_id}"},
+            )
+    except httpx.RequestError as exc:
+        raise HTTPException(status_code=502, detail="Trading account storage could not be reached") from exc
     if not resp.is_success:
         raise HTTPException(status_code=502, detail="Could not disconnect the trading account")
     return {"deleted": True}
