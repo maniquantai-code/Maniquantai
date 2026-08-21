@@ -6,6 +6,6 @@
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
   "outputDirectory": ".next",
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/index.py" }
+    { "src": "/api/(.*)", "dest": "/api/index.py?__path=/$1" }
   ]
 }
