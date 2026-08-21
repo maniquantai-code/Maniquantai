@@ -1,0 +1,1 @@
+The bridge is intentionally separate from Vercel because the native MetaTrader 5 terminal must run on Windows.
