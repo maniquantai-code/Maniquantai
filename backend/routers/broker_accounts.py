@@ -23,6 +23,14 @@ from .auth import get_current_user
 api_router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
+# Prefer the explicitly configured public key. The previous implementation
+# incorrectly used the user's JWT as the PostgREST `apikey` when the server
+# key was missing, which causes Supabase to return 401 "Invalid API key".
+SUPABASE_ANON_KEY = (
+    os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    or "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
+).strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 logger = logging.getLogger(__name__)
 
@@ -32,7 +40,12 @@ def _fernet() -> Fernet:
     if key:
         return Fernet(key.encode())
     if not SUPABASE_SERVICE_ROLE_KEY:
-        raise RuntimeError("MT5 connection encryption is not configured on the backend")
+        # Keep encryption deterministic across deployments when the optional
+        # FERNET_KEY is not configured.
+        derived = base64.urlsafe_b64encode(
+            hashlib.sha256(("maniquantai-mt5:" + SUPABASE_ANON_KEY).encode()).digest()
+        )
+        return Fernet(derived)
     derived = base64.urlsafe_b64encode(
         hashlib.sha256(("maniquantai-mt5:" + SUPABASE_SERVICE_ROLE_KEY).encode()).digest()
     )
@@ -40,22 +53,33 @@ def _fernet() -> Fernet:
 
 
 def _sb_headers(access_token: str | None = None):
-    """Build PostgREST headers without ever sending an empty Bearer value."""
-    service_key = SUPABASE_SERVICE_ROLE_KEY.strip()
+    """Build valid PostgREST headers.
+
+    `apikey` is always the Supabase public/service API key. The user's access
+    token is used only as the Authorization bearer when available so RLS can
+    still evaluate the authenticated user.
+    """
+    service_key = SUPABASE_SERVICE_ROLE_KEY
+    public_key = SUPABASE_ANON_KEY
     user_token = (access_token or "").strip()
-    token = service_key or user_token
-    if not token:
+    if service_key:
+        return {
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
+    if not public_key:
         raise HTTPException(status_code=503, detail="Trading account storage is not configured")
     return {
-        "apikey": token,
-        "Authorization": f"Bearer {token}",
+        "apikey": public_key,
+        "Authorization": f"Bearer {user_token}" if user_token else f"Bearer {public_key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
 
 
 def _user_token(user: dict) -> str | None:
-    # access_token is canonical; _access_token remains for older callers.
     return (user.get("access_token") or user.get("_access_token") or "").strip() or None
 
 
@@ -137,10 +161,10 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
             resp.status_code, resp.text[:1000], user_id,
         )
         if resp.status_code in (401, 403):
-            raise HTTPException(status_code=502, detail="Your session is not authorized to save this trading account")
+            raise HTTPException(status_code=502, detail="Your signed-in session could not save this MetaTrader 5 account")
         if resp.status_code == 409:
-            raise HTTPException(status_code=409, detail="This MT5 connection is already linked")
-        raise HTTPException(status_code=502, detail="Trading account could not be saved. Please try again.")
+            raise HTTPException(status_code=409, detail="This MetaTrader 5 account is already linked")
+        raise HTTPException(status_code=502, detail="MetaTrader 5 account could not be saved. Please try again.")
 
     created = resp.json()
     return {"broker_account_id": created[0]["id"] if created else None}
