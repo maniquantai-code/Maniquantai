@@ -1,7 +1,11 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
   "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.py" }
+  ]
 }
