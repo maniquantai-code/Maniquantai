@@ -22,7 +22,17 @@ from .auth import get_current_user
 
 api_router = APIRouter(prefix="/api/broker-accounts", tags=["broker-accounts"])
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-SUPABASE_ANON_KEY = (os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY") or "").strip()
+# The publishable key is safe to use for RLS-scoped requests. Keep the same
+# fallback as the auth/strategy routers so a missing Vercel env var does not
+# produce an invalid/empty `apikey` header. A service-role key, when configured,
+# remains server-side and is preferred for server-owned operations.
+SUPABASE_ANON_KEY = os.getenv(
+    "SUPABASE_ANON_KEY",
+    os.getenv(
+        "SUPABASE_PUBLISHABLE_KEY",
+        "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
+    ),
+).strip()
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 logger = logging.getLogger(__name__)
 
@@ -40,13 +50,14 @@ def _fernet() -> Fernet:
 
 
 def _sb_headers(access_token: str | None = None):
+    """Build valid Supabase REST headers without ever emitting `Bearer `."""
     key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY
-    if not key:
+    token = SUPABASE_SERVICE_ROLE_KEY or (access_token or "").strip()
+    if not key or not token:
         raise HTTPException(503, "Trading account storage is not configured")
-    auth = SUPABASE_SERVICE_ROLE_KEY or access_token or key
     return {
         "apikey": key,
-        "Authorization": f"Bearer {auth}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -93,7 +104,7 @@ async def list_accounts(user=Depends(get_current_user)):
 
 @api_router.post("/mt5")
 async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
-    """Save or replace the user's MT5 connection without trying to reach MT5 from Vercel."""
+    """Save or replace the user's MT5 connection without reaching MT5 from Vercel."""
     uid = user["id"]
     server = req.server.strip()
     label = req.label.strip() if req.label else None
@@ -117,8 +128,6 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
 
     try:
         async with httpx.AsyncClient(timeout=15) as c:
-            # Fetch first so reconnecting is idempotent and never creates a
-            # duplicate MT5 record.
             existing = await c.get(
                 f"{SUPABASE_URL}/rest/v1/broker_accounts",
                 headers=headers,
@@ -162,8 +171,6 @@ async def connect_mt5(req: MT5ConnectRequest, user=Depends(get_current_user)):
                     rows = r.json() or []
                     if rows:
                         return {"broker_account_id": rows[0]["id"], "saved": True, "message": "MetaTrader 5 account linked successfully."}
-                    # Some PostgREST configurations return an empty body even
-                    # after a successful write. Confirm by querying the record.
                     confirm = await c.get(
                         f"{SUPABASE_URL}/rest/v1/broker_accounts",
                         headers=headers,
