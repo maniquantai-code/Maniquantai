@@ -2,12 +2,11 @@
 
 The cloud API never requires the Supabase service-role key for bridge traffic.
 Authenticated web requests use the user's Supabase JWT; the Windows bridge uses
-a short-lived-style opaque token whose SHA-256 hash is stored server-side.
+an opaque token whose SHA-256 hash is stored server-side.
 """
 from __future__ import annotations
 
 import hashlib
-import hmac
 import os
 import secrets
 from datetime import datetime, timezone
@@ -20,7 +19,10 @@ from .auth import get_current_user
 
 api_router = APIRouter(prefix="/api/mt5-bridge", tags=["mt5-bridge"])
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+SUPABASE_ANON_KEY = os.getenv(
+    "SUPABASE_ANON_KEY",
+    "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
+).strip()
 BRIDGE_PEPPER = os.getenv("MT5_BRIDGE_PEPPER", "").strip()
 
 
@@ -70,14 +72,12 @@ async def _rpc(name: str, payload: dict[str, Any], token: str | None = None, tim
     async with httpx.AsyncClient(timeout=timeout) as c:
         r = await c.post(f"{SUPABASE_URL}/rest/v1/rpc/{name}", headers=_api_headers(token), json=payload)
     if not r.is_success:
-        detail = r.text[:500]
-        raise HTTPException(502, f"MT5 bridge operation failed: {detail}")
+        raise HTTPException(502, f"MT5 bridge operation failed: {r.text[:500]}")
     return r.json()
 
 
 @api_router.post("/register")
 async def register(user=Depends(get_current_user)):
-    """Issue a bridge token without requiring the Supabase service-role key."""
     token = secrets.token_urlsafe(32)
     result = await _rpc(
         "mt5_register_bridge",
@@ -90,16 +90,10 @@ async def register(user=Depends(get_current_user)):
     }
 
 
-async def _claim_jobs(token: str) -> list[dict[str, Any]]:
-    result = await _rpc("mt5_claim_jobs", {"p_token_hash": _hash(token)}, timeout=15)
-    if not isinstance(result, list):
-        return []
-    return result
-
-
 @api_router.get("/jobs")
 async def jobs(token: str):
-    return {"jobs": await _claim_jobs(token)}
+    result = await _rpc("mt5_claim_jobs", {"p_token_hash": _hash(token)}, timeout=15)
+    return {"jobs": result if isinstance(result, list) else []}
 
 
 async def _complete(job_id: str, token: str, *, status: str, rates=None, account=None, error=None, result=None):
@@ -128,6 +122,8 @@ async def complete(job_id: str, req: Complete):
 
 @api_router.post("/jobs/{job_id}/fail")
 async def fail(job_id: str, req: Fail):
+    if not req.error:
+        raise HTTPException(400, "Bridge failure reason is required")
     return await _complete(job_id, req.token, status="failed", error=req.error[:1000])
 
 
