@@ -1,0 +1,1 @@
+Configuration is in .env.example.

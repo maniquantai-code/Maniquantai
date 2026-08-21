@@ -1,0 +1,1 @@
+See agent.py, requirements.txt and .env.example. Run the bridge on the Windows machine hosting the logged-in MT5 terminal.
