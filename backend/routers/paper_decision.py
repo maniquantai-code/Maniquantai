@@ -12,7 +12,7 @@ ANON = "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
 
 class DecisionRequest(BaseModel):
     strategy_id: str
-    decision: str  # yes | no | live_yes | live_no
+    decision: str  # yes | no | live_yes | live_no | live_start
 
 def headers(token: str) -> dict[str, str]:
     return {"apikey": ANON, "Authorization": f"Bearer {token}", "Content-Type": "application/json", "Prefer": "return=representation"}
@@ -87,6 +87,16 @@ async def paper_decision(req: DecisionRequest, user=Depends(get_current_user)):
         state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "skipped", "live": "current"}
         add_activity(state, "Live trading approved", "User explicitly approved live execution after declining paper trading; audited bypass recorded.")
         await save(req.strategy_id, user["id"], token, state, "live_ready")
-        return {"ok": True, "next_action": "start_live", "message": "Live trading approved. I’ll proceed to the live-execution gate now."}
+        return {"ok": True, "next_action": "start_live", "message": "Live trading approved. Live execution is ready to start."}
 
-    raise HTTPException(400, "Decision must be yes, no, live_yes, or live_no.")
+    if decision == "live_start":
+        if state.get("pipeline_stage") != "live_ready" or state.get("live_bypass_approved") is not True:
+            raise HTTPException(409, "Live trading is not ready. Complete the paper-trading choice and explicit live approval first.")
+        state["pipeline_stage"] = "live_running"
+        state["pending_confirmation"] = None
+        state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "skipped", "live": "current"}
+        add_activity(state, "Live trading started", "User explicitly started live execution after the audited paper-trading bypass approval.", "running")
+        await save(req.strategy_id, user["id"], token, state, "live_running")
+        return {"ok": True, "next_action": "live_running", "message": "Live trading started. The approved strategy is now in the live-execution phase."}
+
+    raise HTTPException(400, "Decision must be yes, no, live_yes, live_no, or live_start.")
