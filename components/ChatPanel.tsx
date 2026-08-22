@@ -77,8 +77,7 @@ export function ChatPanel({strategyId,initialMessages,onboarding=false}:{strateg
        addAssistant(payload.message||"Paper trading will be skipped. Do you explicitly approve live trading?");
      } else if(decision==="live_yes"){
        setLiveApprovalPending(false);
-       addAssistant(payload.message||"Live trading approved. Proceeding to the live-execution gate.");
-       await backendMessage("do live trade",false);
+       addAssistant(payload.message||"Live trading approved. The live-execution gate is now open.");
      } else {
        setLiveApprovalPending(true);addAssistant(payload.message||"Live trading remains locked. No live order was submitted.");
      }
