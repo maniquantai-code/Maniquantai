@@ -1,6 +1,7 @@
-"""Compatibility wrapper that keeps the existing gated chat while allowing
-MT5, another broker API, or Yahoo Finance as the market-data source."""
+"""Compatibility wrapper that keeps the existing gated chat while routing
+research/backtesting through MT5, another broker API, or Yahoo Finance."""
 from . import chat as legacy
+from .pipeline_multi import run_research as multi_run_research, run_backtest as multi_run_backtest
 import os
 import httpx
 
@@ -13,9 +14,8 @@ async def market_data_available(uid,token):
     async with httpx.AsyncClient(timeout=10) as c:
         r=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","select":"id","limit":"1"})
     if not r.is_success: raise legacy.HTTPException(502,"Could not verify your market-data connections")
-    # No connector is also valid: the pipeline will use Yahoo Finance.
+    # No connector is valid: the deterministic pipeline will use Yahoo Finance.
     return True
-
 
 def connected_confirmation(x):
     v=legacy.norm(x)
@@ -23,5 +23,7 @@ def connected_confirmation(x):
 
 legacy.mt5_connected=market_data_available
 legacy.connected_confirmation=connected_confirmation
+legacy.run_research=multi_run_research
+legacy.run_backtest=multi_run_backtest
 legacy.SYSTEM=legacy.SYSTEM.replace("your connected MetaTrader 5 account first; the configured fallback is used only when the MT5 feed fails","your selected MT5 or broker API first; another connected source is tried next, then Yahoo Finance")
 api_router=legacy.api_router
