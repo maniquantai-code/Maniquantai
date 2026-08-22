@@ -17,7 +17,7 @@ from .pipeline_mt5 import run_backtest, run_research
 api_router = APIRouter(prefix="/api", tags=["chat"])
 SUPABASE_URL = "https://zuimeyynaarjsovnqilk.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
-SYSTEM = "You are ManiQuantAI. Parse strategy requests, never invent trading metrics, and use the deterministic pipeline for research and backtesting. Market data comes from the user's connected MetaTrader 5 account first; the configured fallback is used only when the MT5 feed fails. Never claim a backtest ran unless deterministic pipeline state confirms it."
+SYSTEM = "You are ManiQuantAI. Parse strategy requests, never invent trading metrics, and use the deterministic pipeline for research and backtesting. Market data comes from the user's connected MetaTrader 5 account first; the configured fallback is used only when the MT5 feed fails. Never claim a backtest ran unless deterministic pipeline state confirms it. Never contradict the authoritative pipeline state."
 
 
 class ChatRequest(BaseModel):
@@ -73,6 +73,10 @@ def yes(x: str) -> bool:
     return norm(x) in {"yes", "y", "confirm", "confirmed", "proceed", "go ahead", "do it", "start", "start research", "start it"}
 
 
+def do_request(x: str) -> bool:
+    return norm(x) in {"do", "proceed", "continue", "next", "go", "move on", "do it", "start"}
+
+
 def connected_confirmation(x: str) -> bool:
     v = norm(x)
     return v in {"connected", "mt5 connected", "i connected mt5", "meta trader connected", "metatrader connected", "done"} or ("connected" in v and "mt5" in v)
@@ -91,6 +95,36 @@ def live(x: str) -> bool:
     return "live trade" in v or "live trading" in v or "start live" in v
 
 
+def approval_recorded(state: dict) -> bool:
+    if state.get("approved") is True:
+        return True
+    for item in state.get("activity", []):
+        if isinstance(item, dict) and "human approval recorded" in str(item.get("title", "")).lower():
+            return True
+    return False
+
+
+def normalize_gate_state(state: dict) -> None:
+    """Reconcile older pipeline states with the authoritative dashboard activity.
+
+    Some earlier pipeline writes recorded the approval activity but left
+    pipeline_stage at backtest_complete and omitted approved=true. The chat
+    must derive the same gate state the dashboard is already showing instead
+    of sending the user backwards through completed gates.
+    """
+    if approval_recorded(state) and state.get("backtest"):
+        state["approved"] = True
+        if state.get("pipeline_stage") in {"backtest_complete", "approval_complete", "approved", None}:
+            state["pipeline_stage"] = "paper_ready"
+        agents = dict(state.get("agents", {}))
+        agents["approval"] = "complete"
+        if state.get("pipeline_stage") in {"paper_ready", "paper_running"}:
+            agents["paper"] = "current"
+        state["agents"] = agents
+        if state.get("pipeline_stage") == "paper_ready":
+            state["pending_confirmation"] = "paper_launch"
+
+
 def activity(state: dict, title: str, detail: str, status: str = "complete") -> None:
     items = list(state.get("activity", []))
     items.append({"time": datetime.now(timezone.utc).isoformat(), "title": title, "detail": detail, "status": status})
@@ -105,6 +139,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, user=Depends
 
     strategy = await load(req.strategy_id, user["id"], token)
     state = strategy.get("spec") if isinstance(strategy.get("spec"), dict) else {}
+    normalize_gate_state(state)
     text = norm(req.message)
     action = response = None
 
@@ -196,7 +231,15 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, user=Depends
             await save(req.strategy_id, user["id"], token, state, "research_complete")
 
     elif approve(text):
-        if state.get("pipeline_stage") != "backtest_complete" or not state.get("backtest"):
+        if approval_recorded(state) and state.get("backtest"):
+            state["approved"] = True
+            state["pipeline_stage"] = "paper_ready"
+            state["pending_confirmation"] = "paper_launch"
+            state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "current", "live": "gated"}
+            action = "already_approved"
+            response = "Your strategy is already approved. **Paper trading is ready to start.**"
+            await save(req.strategy_id, user["id"], token, state, "paper_ready")
+        elif state.get("pipeline_stage") != "backtest_complete" or not state.get("backtest"):
             response = "Approval is available after the deterministic backtest is complete. I’ll show the backtest criteria and results on the dashboard first."
         else:
             state["approved"] = True
@@ -206,23 +249,31 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks, user=Depends
             state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "current", "live": "gated"}
             activity(state, "Human approval recorded", "Backtest passed the review gate and the strategy is now eligible for paper trading.")
             action = "approve"
-            response = "Approved. **Paper trading is now the next gated stage.** Say **do paper trade** when you want to start the paper session."
+            response = "Approved. **Paper trading is now ready.** Say **do paper trade** when you want to start the paper session."
             await save(req.strategy_id, user["id"], token, state, "paper_ready")
 
-    elif paper(text):
-        if state.get("pipeline_stage") != "paper_ready" or not state.get("approved"):
-            response = "Paper trading is gated until the deterministic backtest and human approval gates are complete."
+    elif paper(text) or (do_request(text) and approval_recorded(state) and state.get("backtest") and state.get("pipeline_stage") not in {"paper_complete", "live_ready", "live_running"}):
+        normalize_gate_state(state)
+        if not state.get("backtest"):
+            response = "Paper trading is unavailable because the deterministic backtest has not completed yet."
+            action = "paper_gated"
+        elif not approval_recorded(state):
+            response = "Paper trading is locked until human approval is recorded. The deterministic backtest is complete, so approval is the next step."
+            action = "paper_gated"
         else:
+            state["approved"] = True
             state["pipeline_stage"] = "paper_ready"
             state["pending_confirmation"] = "paper_launch"
+            state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "current", "live": "gated"}
             action = "paper_ready"
-            response = "Paper trading is ready. Say **do paper trade** to launch it using this strategy."
+            response = "**Paper trading is ready.** Your backtest passed and human approval is already recorded. The next action is to start the paper session."
             await save(req.strategy_id, user["id"], token, state, "paper_ready")
 
     elif live(text):
+        normalize_gate_state(state)
         if state.get("pipeline_stage") != "paper_complete":
             action = "live_gated"
-            response = "Live trading is not the next stage yet. Complete paper trading first. Once the paper stage is complete, ManiQuantAI can move the approved strategy to the MetaTrader 5 live-execution gate."
+            response = "**Live trading is locked for now.** Your strategy must complete paper trading first. Once paper trading passes, ManiQuantAI can move the approved strategy to the MetaTrader 5 live-execution gate."
         else:
             action = "live_ready"
             response = "The strategy has completed paper trading and is eligible for the MetaTrader 5 live-execution gate. Confirm the live execution request to continue."
