@@ -8,6 +8,7 @@ function now(){return new Date().toLocaleTimeString([], {hour:"2-digit",minute:"
 function dbTime(value:string){try{return new Date(value).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});}catch{return now();}}
 function norm(value:string){return value.trim().toLowerCase().replace(/\s+/g," ");}
 function wantsPaper(value:string){const v=norm(value);return v.includes("paper trading")||v.includes("paper trade");}
+function wantsLive(value:string){const v=norm(value);return v.includes("live trade")||v.includes("live trading")||v.includes("start live");}
 
 export function ChatPanel({strategyId,initialMessages,onboarding=false}:{strategyId?:string;initialMessages?:ChatMessage[];onboarding?:boolean}){
  const [messages,setMessages]=useState<ChatMessage[]>(initialMessages??[]);
@@ -58,6 +59,18 @@ export function ChatPanel({strategyId,initialMessages,onboarding=false}:{strateg
    return finalAssistant;
  }
 
+ async function startLiveTrading(){
+   if(!strategyId)return;
+   setSending(true);
+   try{
+     const token=await getAccessToken();
+     const res=await fetch("/api/paper-decision",{method:"POST",headers:{"Content-Type":"application/json",...(token?{Authorization:`Bearer ${token}`}:{})},body:JSON.stringify({strategy_id:strategyId,decision:"live_start"})});
+     const payload=await res.json();
+     if(!res.ok)throw new Error(payload.detail||payload.message||"Live trading is not ready.");
+     addAssistant(payload.message||"Live trading started. The approved strategy is now in the live-execution phase.");
+   }catch(e){addAssistant(`I couldn't start live trading.\n\n${e instanceof Error?e.message:"Request failed."}`)}finally{setSending(false)}
+ }
+
  async function paperDecision(decision:"yes"|"no"|"live_yes"|"live_no"){
    if(!strategyId)return;
    const choiceLabel=decision==="yes"?"Yes":decision==="no"?"No":decision==="live_yes"?"Approve live":"No";
@@ -86,6 +99,11 @@ export function ChatPanel({strategyId,initialMessages,onboarding=false}:{strateg
 
  async function sendMessage(){
    if(!input.trim()||sending)return;const content=input.trim();setInput("");
+   if(wantsLive(content)){
+     setMessages(m=>[...m,{role:"user",content,timestamp:now()}]);await persist("user",content);
+     await startLiveTrading();
+     return;
+   }
    if(wantsPaper(content)&&!paperChoicePending&&!liveApprovalPending){
      setMessages(m=>[...m,{role:"user",content,timestamp:now()}]);await persist("user",content);
      setPaperChoicePending(true);
