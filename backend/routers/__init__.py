@@ -1,7 +1,7 @@
 from .llm import api_router as llm_router
-from .chat import api_router as chat_router
+from .chat_multi import api_router as chat_router
 from .strategies import api_router as strategies_router
-from .pipeline_mt5 import api_router as pipeline_router
+from .pipeline_multi import api_router as pipeline_router
 from .wallet import api_router as wallet_router
 from .broker_accounts import api_router as broker_accounts_router
 from .mt5_bridge import api_router as mt5_bridge_router
