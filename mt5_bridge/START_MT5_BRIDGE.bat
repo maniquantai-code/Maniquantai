@@ -17,13 +17,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist ".env" (
-  echo ERROR: mt5_bridge\.env was not found.
-  echo Copy .env.example to .env and set MANIQUANT_API_URL and MT5_BRIDGE_TOKEN.
-  pause
-  exit /b 1
-)
-
 echo Installing/checking bridge dependencies...
 python -m pip install -r requirements.txt
 if errorlevel 1 (
@@ -33,11 +26,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting ManiQuantAI MT5 bridge...
-echo Keep this window open while live trading is enabled.
+echo Starting ManiQuantAI MT5 Bridge login...
+echo Paste the token generated in ManiQuantAI Settings.
 echo.
-python agent.py
+python bridge_app.py
 
-echo.
-echo The MT5 bridge stopped.
-pause
+if errorlevel 1 (
+  echo.
+  echo The MT5 bridge stopped with an error.
+  pause
+)
