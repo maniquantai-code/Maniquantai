@@ -6,7 +6,7 @@ The deterministic backtest and existing gates remain unchanged.
 """
 from __future__ import annotations
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from .auth import get_current_user
@@ -16,14 +16,25 @@ from .broker_accounts import fetch_broker_api_candles
 api_router=APIRouter(prefix="/api/pipeline",tags=["pipeline"])
 SB=os.getenv("SUPABASE_URL","https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
 ANON=os.getenv("SUPABASE_ANON_KEY","sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X").strip()
+BRIDGE_ONLINE_SECONDS=15
 
 def _h(token): return {"apikey":ANON,"Authorization":f"Bearer {token}","Content-Type":"application/json","Prefer":"return=representation"}
 
 async def _accounts(uid,token):
     async with httpx.AsyncClient(timeout=10) as c:
-        r=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","select":"id,connector_type,connector_name,label,encrypted_payload,is_primary,created_at","order":"is_primary.desc,created_at.desc"})
+        r=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","select":"id,connector_type,connector_name,label,encrypted_payload,is_primary,bridge_enabled,last_verified_at,created_at","order":"is_primary.desc,created_at.desc"})
     if not r.is_success: raise RuntimeError("Could not read trading account connections")
     return r.json()
+
+def _mt5_online(account):
+    if not account.get("bridge_enabled") or not account.get("last_verified_at"):
+        return False
+    try:
+        ts=datetime.fromisoformat(str(account["last_verified_at"]).replace("Z","+00:00"))
+        if ts.tzinfo is None: ts=ts.replace(tzinfo=timezone.utc)
+        return datetime.now(timezone.utc)-ts <= timedelta(seconds=BRIDGE_ONLINE_SECONDS)
+    except Exception:
+        return False
 
 async def _market_data(uid,sid,token,spec):
     accounts=await _accounts(uid,token)
@@ -32,7 +43,11 @@ async def _market_data(uid,sid,token,spec):
     errors=[]
     for account in ordered:
         try:
-            if account["connector_type"]=="mt5": rows=await mt5(uid,sid,spec)
+            if account["connector_type"]=="mt5":
+                if not _mt5_online(account):
+                    errors.append("MetaTrader 5 bridge is offline")
+                    continue
+                rows=await mt5(uid,sid,spec)
             elif account["connector_type"]=="broker_api": rows=await fetch_broker_api_candles(account,spec["symbol"],spec["timeframe"],spec["lookback_days"])
             else: continue
             return rows,account["connector_name"] or "Broker API"
@@ -72,7 +87,7 @@ async def run_backtest(strategy_id,user_id,token):
 async def run_pipeline(strategy_id,user_id,token): await run_research(strategy_id,user_id,token)
 
 @api_router.get("/status/{strategy_id}")
-async def status(strategy_id,user=Depends(get_current_user)):
+async def status(strategy_id:str,user=Depends(get_current_user)):
     token=user.get("_access_token") or user.get("access_token")
     if not token: raise HTTPException(401,"Missing access token")
     strategy=await load(strategy_id,user["id"],token); state=strategy.get("spec") or {}
