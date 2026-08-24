@@ -19,4 +19,8 @@ Your job is to convert the user's natural-language trading strategy into a deter
 
 ## Compilation contract
 
-The output must contain `version`, `symbol`, `timeframe`, `direction`, `entry`, `exit`, `risk`, `position`, and `source` fields. `source.user_prompt` must contain the user's original prompt. Use `unresolved` for information that is necessary but was not specified.
+Return `version`, `symbol`, `timeframe`, `direction`, `entry`, `exit`, `risk`, `position`, `runtime`, and `source`.
+
+`runtime` MUST contain the normalized fields consumed by the deterministic engine: `symbol`, `timeframe`, `lookback_days`, `rsi_period`, `rsi_entry_below`, `rsi_exit_above`, `bollinger_period`, `bollinger_std`, `risk_pct`, `max_hold_hours`, `stop_loss`, and `take_profit`. Use `null` for genuinely unspecified optional values and list missing required information in `unresolved` rather than inventing it.
+
+`source.user_prompt` MUST contain the user's original prompt.
