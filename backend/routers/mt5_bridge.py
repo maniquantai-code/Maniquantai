@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
 from .auth import get_current_user
 
@@ -118,7 +118,6 @@ async def _ensure_mt5_account(user: dict[str, Any]) -> str:
             json=payload,
         )
         if not created.is_success:
-            # Keep the client-facing error safe while preserving the useful HTTP status.
             detail = created.text[:300].replace("\n", " ")
             raise HTTPException(502, f"Could not initialize the MetaTrader 5 bridge record: {detail}")
         result = created.json() or []
@@ -159,6 +158,17 @@ async def revoke(user=Depends(get_current_user)):
 @api_router.get("/status")
 async def status(user=Depends(get_current_user)):
     return await _rpc("mt5_bridge_status", {}, token=user["access_token"])
+
+
+@api_router.post("/heartbeat")
+async def heartbeat(authorization: str | None = Header(default=None)):
+    """Accept a heartbeat from the MT5 EA using its bridge token."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Bridge token required")
+    token = authorization[7:].strip()
+    if len(token) < 16:
+        raise HTTPException(401, "Invalid bridge token")
+    return await _rpc("mt5_bridge_heartbeat", {"p_token_hash": _hash(token)}, timeout=10)
 
 
 @api_router.get("/jobs")
