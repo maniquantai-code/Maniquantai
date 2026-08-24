@@ -1,16 +1,11 @@
 //+------------------------------------------------------------------+
 //| ManiQuantAI MT5 Bridge                                           |
-//| Runs inside the user's MetaTrader 5 terminal.                   |
-//|                                                                  |
-//| The EA polls the ManiQuantAI HTTPS bridge API for server-approved |
-//| jobs and executes only execution jobs returned for its token.   |
+//| Connects a user's MetaTrader 5 terminal to ManiQuantAI.          |
 //+------------------------------------------------------------------+
 #property strict
-#property version   "1.0.1"
+#property version "1.0.2"
 #property description "ManiQuantAI MT5 Bridge"
-#property description "Connects a user's MT5 terminal to ManiQuantAI over HTTPS."
 
-// Production ManiQuantAI API. This must match the URL allowed in MT5 WebRequest settings.
 input string ManiQuantAPI = "https://maniquantai.vercel.app";
 input string BridgeToken  = "";
 input int    PollSeconds  = 2;
@@ -19,7 +14,7 @@ input long   MagicNumber  = 260821;
 
 string g_api;
 
-auto string JsonString(const string json,const string key,const string fallback="")
+string JsonString(const string json,const string key,const string fallback="")
 {
    string needle="\""+key+"\"";
    int p=StringFind(json,needle);
@@ -68,7 +63,7 @@ string HttpGet(const string path,int &status)
    status=WebRequest("GET",g_api+path,headers,15000,data,result,headers);
    if(status==-1)
    {
-      Print("ManiQuantAI WebRequest failed. Add https://maniquantai.vercel.app to MT5 Tools > Options > Expert Advisors > Allow WebRequest. Error=",GetLastError());
+      Print("ManiQuantAI WebRequest failed. Add https://maniquantai.vercel.app to MT5 WebRequest allow-list. Error=",GetLastError());
       return "";
    }
    return CharArrayToString(result);
@@ -84,7 +79,7 @@ string HttpPost(const string path,const string body,int &status)
    status=WebRequest("POST",g_api+path,headers,15000,data,result,headers);
    if(status==-1)
    {
-      Print("ManiQuantAI POST failed. Add https://maniquantai.vercel.app to MT5 WebRequest list. Error=",GetLastError());
+      Print("ManiQuantAI POST failed. Add https://maniquantai.vercel.app to MT5 WebRequest allow-list. Error=",GetLastError());
       return "";
    }
    return CharArrayToString(result);
@@ -93,34 +88,42 @@ string HttpPost(const string path,const string body,int &status)
 void SendHeartbeat()
 {
    MqlTick tick;
-   string symbol=_Symbol;
-   SymbolInfoTick(symbol,tick);
-   string body=StringFormat("{\"symbol\":\"%s\",\"bid\":%.10f,\"ask\":%.10f,\"account_login\":%I64d,\"server\":\"%s\"}",symbol,tick.bid,tick.ask,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER));
+   SymbolInfoTick(_Symbol,tick);
+   string body=StringFormat("{\"symbol\":\"%s\",\"bid\":%.10f,\"ask\":%.10f,\"account_login\":%I64d,\"server\":\"%s\"}",_Symbol,tick.bid,tick.ask,AccountInfoInteger(ACCOUNT_LOGIN),AccountInfoString(ACCOUNT_SERVER));
    int status=0;
    string response=HttpPost("/api/mt5-bridge/heartbeat",body,status);
    if(status<200 || status>=300)
       Print("ManiQuantAI heartbeat rejected. HTTP=",status," Response=",response);
 }
 
-bool ExecuteJob(const string job)
+void CompleteJob(const string id,const bool ok,const string message,const MqlTradeResult &res)
+{
+   if(id=="") return;
+   int status=0;
+   string body;
+   if(ok)
+      body=StringFormat("{\"token\":\"%s\",\"job_id\":\"%s\",\"result\":{\"retcode\":%u,\"order\":%I64u,\"deal\":%I64u,\"volume\":%.8f,\"price\":%.10f,\"comment\":\"%s\"}}",BridgeToken,id,res.retcode,res.order,res.deal,res.volume,res.price,res.comment);
+   else
+      body=StringFormat("{\"token\":\"%s\",\"job_id\":\"%s\",\"error\":\"%s\"}",BridgeToken,id,message);
+   string path=(ok ? "/api/mt5-bridge/execution/"+id+"/complete" : "/api/mt5-bridge/execution/"+id+"/fail");
+   HttpPost(path,body,status);
+}
+
+void ExecuteJob(const string job)
 {
    string id=JsonString(job,"id","");
    string symbol=JsonString(job,"symbol","");
-   if(symbol=="") symbol=JsonString(job,"request_symbol","");
    string side=JsonString(job,"side","");
-   if(side=="") side=JsonString(job,"request_side","");
    double volume=JsonNumber(job,"volume",0.0);
-   if(volume<=0.0) volume=JsonNumber(job,"request_volume",0.0);
    double sl=JsonNumber(job,"stop_loss",0.0);
    double tp=JsonNumber(job,"take_profit",0.0);
-   if(symbol=="" || volume<=0.0 || (side!="buy" && side!="sell")) return false;
+   if(symbol=="" || volume<=0.0 || (side!="buy" && side!="sell")) return;
+   if(!SymbolSelect(symbol,true)) { Print("ManiQuantAI symbol unavailable: ",symbol); return; }
 
-   if(!SymbolSelect(symbol,true)) { Print("ManiQuantAI: symbol unavailable: ",symbol); return false; }
    MqlTick tick;
-   if(!SymbolInfoTick(symbol,tick)) return false;
-
+   if(!SymbolInfoTick(symbol,tick)) return;
    MqlTradeRequest req={};
-   MqlTradeResult  res={};
+   MqlTradeResult res={};
    req.action=TRADE_ACTION_DEAL;
    req.symbol=symbol;
    req.volume=volume;
@@ -134,29 +137,20 @@ bool ExecuteJob(const string job)
    req.type_filling=ORDER_FILLING_FOK;
    req.comment="ManiQuantAI";
 
-   if(!OrderSend(req,res))
+   bool sent=OrderSend(req,res);
+   if(!sent || (res.retcode!=TRADE_RETCODE_DONE && res.retcode!=TRADE_RETCODE_PLACED))
    {
-      Print("ManiQuantAI order send failed: ",GetLastError());
-      if(id!="") { int st=0; HttpPost("/api/mt5-bridge/execution/"+id+"/fail",StringFormat("{\"job_id\":\"%s\",\"error\":\"OrderSend failed\"}",id),st); }
-      return false;
+      Print("ManiQuantAI order failed. retcode=",res.retcode," error=",GetLastError());
+      CompleteJob(id,false,StringFormat("MT5 retcode %u: %s",res.retcode,res.comment),res);
+      return;
    }
-
-   if(id!="")
-   {
-      string payload=StringFormat("{\"job_id\":\"%s\",\"result\":{\"retcode\":%u,\"order\":%I64u,\"deal\":%I64u,\"volume\":%.8f,\"price\":%.10f,\"comment\":\"%s\"}}",id,res.retcode,res.order,res.deal,res.volume,res.price,res.comment);
-      int st=0;
-      if(res.retcode==TRADE_RETCODE_DONE || res.retcode==TRADE_RETCODE_PLACED)
-         HttpPost("/api/mt5-bridge/execution/"+id+"/complete",payload,st);
-      else
-         HttpPost("/api/mt5-bridge/execution/"+id+"/fail",StringFormat("{\"job_id\":\"%s\",\"error\":\"MT5 retcode %u: %s\"}",id,res.retcode,res.comment),st);
-   }
-   return true;
+   CompleteJob(id,true,"",res);
 }
 
 void PollJobs()
 {
    int status=0;
-   string json=HttpGet("/api/mt5-bridge/jobs",status);
+   string json=HttpGet("/api/mt5-bridge/jobs?token="+BridgeToken,status);
    if(status<200 || status>=300 || json=="") return;
    int jobs=StringFind(json,"\"jobs\"");
    if(jobs<0) return;
@@ -175,9 +169,7 @@ void PollJobs()
          depth--;
          if(depth==0)
          {
-            string job=StringSubstr(json,first,i-first+1);
-            string type=JsonString(job,"job_type","execution");
-            if(type=="execution") ExecuteJob(job);
+            ExecuteJob(StringSubstr(json,first,i-first+1));
             break;
          }
       }
@@ -199,7 +191,10 @@ int OnInit()
    return INIT_SUCCEEDED;
 }
 
-void OnDeinit(const int reason) { EventKillTimer(); }
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+}
 
 void OnTimer()
 {
