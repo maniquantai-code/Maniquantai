@@ -1,20 +1,29 @@
 """Compatibility wrapper that keeps the existing gated chat while routing
-research/backtesting through MT5, another broker API, or Yahoo Finance."""
+research/backtesting through MT5, another broker API, or Yahoo Finance.
+"""
 from . import chat as legacy
 from .pipeline_multi import run_research as multi_run_research, run_backtest as multi_run_backtest
 import os
+from datetime import datetime, timezone, timedelta
 import httpx
 
 SB=os.getenv("SUPABASE_URL","https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
 ANON=os.getenv("SUPABASE_ANON_KEY","sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X").strip()
+BRIDGE_ONLINE_SECONDS=15
 
 def _h(token): return {"apikey":ANON,"Authorization":f"Bearer {token}","Content-Type":"application/json"}
 
 async def market_data_available(uid,token):
+    cutoff=(datetime.now(timezone.utc)-timedelta(seconds=BRIDGE_ONLINE_SECONDS)).isoformat()
     async with httpx.AsyncClient(timeout=10) as c:
-        r=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","select":"id","limit":"1"})
-    if not r.is_success: raise legacy.HTTPException(502,"Could not verify your market-data connections")
-    # No connector is valid: the deterministic pipeline will use Yahoo Finance.
+        mt5=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","connector_type":"eq.mt5","bridge_enabled":"eq.true","last_verified_at":f"gte.{cutoff}","select":"id","limit":"1"})
+        if mt5.is_success and mt5.json():
+            return True
+        api=await c.get(f"{SB}/rest/v1/broker_accounts",headers=_h(token),params={"user_id":f"eq.{uid}","connector_type":"eq.broker_api","select":"id","limit":"1"})
+    if api.is_success and api.json():
+        return True
+    # No live connector is available. The deterministic pipeline may still
+    # use its configured Yahoo Finance fallback for research/backtesting.
     return True
 
 def connected_confirmation(x):
