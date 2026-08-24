@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import httpx
@@ -24,6 +24,7 @@ SUPABASE_ANON_KEY = os.getenv(
     "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
 ).strip()
 BRIDGE_PEPPER = os.getenv("MT5_BRIDGE_PEPPER", "").strip()
+BRIDGE_ONLINE_SECONDS = 15
 
 
 def _api_headers(token: str | None = None) -> dict[str, str]:
@@ -92,6 +93,9 @@ async def register(user=Depends(get_current_user)):
 
 @api_router.get("/jobs")
 async def jobs(token: str):
+    # mt5_claim_jobs also refreshes last_verified_at. A successful poll is the
+    # bridge heartbeat used by the live gate; saving an account alone is not a
+    # live connection.
     result = await _rpc("mt5_claim_jobs", {"p_token_hash": _hash(token)}, timeout=15)
     return {"jobs": result if isinstance(result, list) else []}
 
@@ -127,11 +131,33 @@ async def fail(job_id: str, req: Fail):
     return await _complete(job_id, req.token, status="failed", error=req.error[:1000])
 
 
+async def _bridge_online(user_id: str, access_token: str) -> bool:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=BRIDGE_ONLINE_SECONDS)).isoformat()
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/broker_accounts",
+            headers=_api_headers(access_token),
+            params={
+                "user_id": f"eq.{user_id}",
+                "connector_type": "eq.mt5",
+                "bridge_enabled": "eq.true",
+                "last_verified_at": f"gte.{cutoff}",
+                "select": "id",
+                "limit": "1",
+            },
+        )
+    if not r.is_success:
+        raise HTTPException(502, "Could not verify the MetaTrader 5 bridge")
+    return bool(r.json())
+
+
 @api_router.post("/execution")
 async def queue_execution(req: ExecutionRequest, strategy_id: str, user=Depends(get_current_user)):
     """Queue a real MT5 order only after explicit server-side live approval."""
     if req.side.lower() not in {"buy", "sell"}:
         raise HTTPException(400, "Order side must be buy or sell")
+    if not await _bridge_online(user["id"], user["access_token"]):
+        raise HTTPException(409, "MetaTrader 5 bridge is offline. Start the Windows bridge before sending a live order.")
     try:
         job_id = await _rpc(
             "mt5_queue_execution",
@@ -140,7 +166,7 @@ async def queue_execution(req: ExecutionRequest, strategy_id: str, user=Depends(
                 "p_symbol": req.symbol.upper(),
                 "p_timeframe": "15m",
                 "p_request": req.model_dump(),
-                "p_expires_at": datetime.now(timezone.utc).isoformat(),
+                "p_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat(),
             },
             token=user["access_token"],
             timeout=15,
@@ -149,7 +175,7 @@ async def queue_execution(req: ExecutionRequest, strategy_id: str, user=Depends(
         if exc.status_code == 502 and "Live trading is waiting" in str(exc.detail):
             raise HTTPException(409, "Live trading is waiting for your explicit approval")
         raise
-    return {"status": "queued", "job_id": job_id, "message": "Live order sent to your MetaTrader 5 bridge."}
+    return {"status": "queued", "job_id": job_id, "message": "Live order queued for your online MetaTrader 5 bridge."}
 
 
 @api_router.post("/execution/{job_id}/complete")
