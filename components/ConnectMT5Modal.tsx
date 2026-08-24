@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { X, Copy, CheckCircle2, Monitor, ShieldCheck, RefreshCw, Ban, Download, ExternalLink } from "lucide-react";
 import { getAccessToken } from "@/lib/supabase";
 
-const EA_SOURCE_URL="/api/mt5-bridge/download";
+const EA_SOURCE_URL="/mt5-bridge-download";
 const EA_DOCS_URL="https://github.com/maniquantai-code/Maniquantai/blob/main/mt5-bridge/ea/README.md";
 
 export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose:()=>void;onConnected?:(accountId:string)=>void}){
