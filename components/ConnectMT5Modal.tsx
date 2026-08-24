@@ -13,6 +13,7 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
  const [saved,setSaved]=useState(false);
  const [bridgePending,setBridgePending]=useState(false);
  const [bridgeToken,setBridgeToken]=useState<string|null>(null);
+ const [bridgeError,setBridgeError]=useState<string|null>(null);
  if(!open)return null;
 
  async function readError(res:Response,fallback:string){
@@ -22,7 +23,7 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
 
  async function handleSubmit(e:React.FormEvent){
   e.preventDefault();
-  setError(null);
+  setError(null);setBridgeError(null);
   const loginNumber=parseInt(login,10);
   if(!loginNumber||!password||!server){setError("Enter your MT5 account number, password, and server.");return}
   setConnecting(true);
@@ -35,9 +36,6 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
    const data=await res.json();
    if(!data?.broker_account_id)throw new Error("The MT5 account was not returned by the server. Please try again.");
 
-   // Saving the account is the successful connection step. Bridge registration
-   // is intentionally best-effort so a bridge outage never makes a saved
-   // trading account look like it failed to connect.
    setSaved(true);
    onConnected?.(data.broker_account_id);
    setLogin("");setPassword("");setServer("");setLabel("");
@@ -45,15 +43,13 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
    try{
     setBridgePending(true);
     const reg=await fetch("/api/mt5-bridge/register",{method:"POST",headers:h});
-    if(reg.ok){
-      const bridge=await reg.json().catch(()=>null);
-      if(bridge?.bridge_token)setBridgeToken(bridge.bridge_token);
-    }
-   }catch{
-    // The account remains saved. The local bridge can be configured later.
-   }finally{
-    setBridgePending(false);
-   }
+    if(!reg.ok)throw new Error(await readError(reg,"Bridge registration failed."));
+    const bridge=await reg.json().catch(()=>null);
+    if(!bridge?.bridge_token)throw new Error("The bridge token was not returned by the server.");
+    setBridgeToken(bridge.bridge_token);
+   }catch(e){
+    setBridgeError(e instanceof Error?e.message:"Bridge registration failed.");
+   }finally{setBridgePending(false);}
   }catch(e){setError(e instanceof Error?e.message:"We couldn't complete the MT5 connection. Please try again.")}finally{setConnecting(false)}
  }
 
@@ -64,13 +60,13 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
    <p className="mb-4 text-xs text-text-faint">Use the same account details as your MT5 terminal. Keep MetaTrader 5 open on the Windows PC running the ManiQuantAI bridge.</p>
    {saved?
     <div className="space-y-3">
-     <div className="rounded-lg border border-accent/30 bg-accent-dim p-3"><p className="text-xs font-medium text-accent">MT5 account saved successfully</p><p className="mt-1 text-xs text-text-muted">Your account is now linked to ManiQuantAI. Research and backtesting can use this account's market data.</p></div>
+     <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">MT5 account saved</p><p className="mt-1 text-xs text-text-muted">The account credentials are stored. This does not mean the Windows bridge is online yet.</p></div>
      {bridgeToken ?
-      <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">Bridge setup</p><p className="mt-1 text-xs text-text-muted">Keep MetaTrader 5 open and run the ManiQuantAI MT5 Bridge on the same Windows PC. Copy this token into its configuration:</p><code className="mt-2 block break-all rounded bg-bg p-2 text-[11px] text-text">{bridgeToken}</code></div>
+      <div className="rounded-lg border border-accent/30 bg-accent-dim p-3"><p className="text-xs font-medium text-accent">Bridge token created</p><p className="mt-1 text-xs text-text-muted">Keep MetaTrader 5 open and run the ManiQuantAI MT5 Bridge on the same Windows PC. Copy this token into its configuration:</p><code className="mt-2 block break-all rounded bg-bg p-2 text-[11px] text-text">{bridgeToken}</code></div>
       : bridgePending ?
-      <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">Finishing bridge setup…</p><p className="mt-1 text-xs text-text-muted">Your MT5 account is already saved. The bridge can finish connecting in the background.</p></div>
+      <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">Registering bridge…</p><p className="mt-1 text-xs text-text-muted">The MT5 account is saved. Waiting for bridge registration to finish.</p></div>
       :
-      <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">Bridge setup can be completed next</p><p className="mt-1 text-xs text-text-muted">Keep MetaTrader 5 open on the Windows PC running the ManiQuantAI MT5 Bridge. Your saved account is not affected if the bridge is temporarily unavailable.</p></div>}
+      <div className="rounded-lg border border-danger/25 bg-danger/5 p-3"><p className="text-xs font-medium text-danger">MT5 bridge is not registered</p><p className="mt-1 text-xs text-text-muted">{bridgeError||"Run the bridge registration again before starting live execution."}</p></div>}
      <button onClick={onClose} className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg">Done</button>
     </div>
     :<form onSubmit={handleSubmit} className="space-y-3">
