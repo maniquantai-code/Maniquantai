@@ -1,6 +1,6 @@
-"""Explicit paper-trading choice and audited live-trading bypass."""
+"""Explicit paper-trading choice and audited live-trading gate."""
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from .auth import get_current_user
 api_router = APIRouter(prefix="/api", tags=["paper-decision"])
 SB = "https://zuimeyynaarjsovnqilk.supabase.co"
 ANON = "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
+BRIDGE_ONLINE_SECONDS = 15
 
 class DecisionRequest(BaseModel):
     strategy_id: str
@@ -34,6 +35,25 @@ def add_activity(state: dict, title: str, detail: str, status: str = "complete")
     items = list(state.get("activity", []))
     items.append({"time": datetime.now(timezone.utc).isoformat(), "title": title, "detail": detail, "status": status})
     state["activity"] = items[-20:]
+
+async def bridge_online(uid: str, token: str) -> bool:
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=BRIDGE_ONLINE_SECONDS)).isoformat()
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            f"{SB}/rest/v1/broker_accounts",
+            headers=headers(token),
+            params={
+                "user_id": f"eq.{uid}",
+                "connector_type": "eq.mt5",
+                "bridge_enabled": "eq.true",
+                "last_verified_at": f"gte.{cutoff}",
+                "select": "id",
+                "limit": "1",
+            },
+        )
+    if not r.is_success:
+        raise HTTPException(502, "Could not verify the MetaTrader 5 bridge")
+    return bool(r.json())
 
 @api_router.post("/paper-decision")
 async def paper_decision(req: DecisionRequest, user=Depends(get_current_user)):
@@ -83,20 +103,27 @@ async def paper_decision(req: DecisionRequest, user=Depends(get_current_user)):
         state["pipeline_stage"] = "live_ready"
         state["pending_confirmation"] = None
         state["approved"] = True
+        state["live_approved"] = True
         state["approved_at"] = state.get("approved_at") or datetime.now(timezone.utc).isoformat()
         state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "skipped", "live": "current"}
-        add_activity(state, "Live trading approved", "User explicitly approved live execution after declining paper trading; audited bypass recorded.")
-        await save(req.strategy_id, user["id"], token, state, "live_ready")
-        return {"ok": True, "next_action": "start_live", "message": "Live trading approved. Live execution is ready to start."}
+        add_activity(state, "Live trading approved", "User explicitly approved live execution after declining paper trading; audited bypass recorded. The live gate is now armed, but no order has been submitted by the approval action.")
+        await save(req.strategy_id, user["id"], token, state, "live_approved")
+        return {"ok": True, "next_action": "start_live", "message": "Live trading approved. The live-execution gate is armed. No order was submitted by the approval step."}
 
     if decision == "live_start":
-        if state.get("pipeline_stage") != "live_ready" or state.get("live_bypass_approved") is not True:
+        if state.get("pipeline_stage") != "live_ready" or state.get("live_bypass_approved") is not True or state.get("live_approved") is not True:
             raise HTTPException(409, "Live trading is not ready. Complete the paper-trading choice and explicit live approval first.")
+        if not await bridge_online(user["id"], token):
+            state["pipeline_stage"] = "live_ready"
+            state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "skipped", "live": "gated"}
+            add_activity(state, "Live execution blocked", "MetaTrader 5 account is saved, but the Windows MT5 bridge has not sent a heartbeat in the last 15 seconds. No order was submitted.", "blocked")
+            await save(req.strategy_id, user["id"], token, state, "live_approved")
+            raise HTTPException(409, "MetaTrader 5 bridge is offline. Keep the MT5 terminal and ManiQuantAI bridge running, then retry.")
         state["pipeline_stage"] = "live_running"
         state["pending_confirmation"] = None
         state["agents"] = {**state.get("agents", {}), "approval": "complete", "paper": "skipped", "live": "current"}
-        add_activity(state, "Live trading started", "User explicitly started live execution after the audited paper-trading bypass approval.", "running")
+        add_activity(state, "Live execution started", "User explicitly started the live-execution phase and the MetaTrader 5 bridge is online. This gate does not invent a signal or submit an order by itself.", "running")
         await save(req.strategy_id, user["id"], token, state, "live_running")
-        return {"ok": True, "next_action": "live_running", "message": "Live trading started. The approved strategy is now in the live-execution phase."}
+        return {"ok": True, "next_action": "live_running", "message": "Live execution started. MetaTrader 5 bridge is online. The live signal/execution worker can now submit only approved execution jobs."}
 
     raise HTTPException(400, "Decision must be yes, no, live_yes, live_no, or live_start.")
