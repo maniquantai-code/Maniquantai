@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { X, Copy, CheckCircle2, Monitor, ShieldCheck, RefreshCw, Ban, Download, ExternalLink } from "lucide-react";
 import { getAccessToken } from "@/lib/supabase";
 
-const EA_SOURCE_URL="/mt5-bridge-download";
+const EA_SOURCE_URL="/ManiQuantAI_MT5_Bridge.mq5";
 const EA_DOCS_URL="https://github.com/maniquantai-code/Maniquantai/blob/main/mt5-bridge/ea/README.md";
 
 export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose:()=>void;onConnected?:(accountId:string)=>void}){
@@ -29,7 +29,7 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
    <div className="mt-5 grid gap-3 sm:grid-cols-3"><Info icon={<ShieldCheck size={16}/>} title="Secure token" text="Only a hash is stored in Supabase. The full token is shown once."/><Info icon={<Monitor size={16}/>} title="Your computer" text="MT5 runs on your Windows PC. No ManiQuantAI VPS is required."/><Info icon={<CheckCircle2 size={16}/>} title="You control it" text="Revoke the bridge any time from this screen."/></div>
    <div className="mt-5 rounded-lg border border-border bg-bg-raised p-4 text-xs text-text-muted"><div className="font-medium text-text">How it works</div><ol className="mt-2 list-decimal space-y-1.5 pl-4"><li>Download the ManiQuantAI MT5 EA source below.</li><li>Compile it in MetaEditor to create the <code>.ex5</code> EA.</li><li>Generate a personal token and copy it.</li><li>Attach the EA to your MT5 chart, enter the token, and enable Algo Trading.</li></ol></div>
    <div className="mt-4 flex flex-col gap-2 sm:flex-row"><a href={EA_SOURCE_URL} download="ManiQuantAI_MT5_Bridge.mq5" className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-text hover:bg-bg-raised"><Download size={15}/> Download EA source</a><a href={EA_DOCS_URL} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm text-text-muted hover:bg-bg-raised"><ExternalLink size={14}/> Installation guide</a></div>
-   <p className="mt-2 text-[11px] leading-4 text-text-faint">The source downloads directly from ManiQuantAI. The final <code>.ex5</code> binary must be compiled with MetaTrader 5 MetaEditor.</p>
+   <p className="mt-2 text-[11px] leading-4 text-text-faint">The EA source is served as a static ManiQuantAI file, so the download does not depend on GitHub API access.</p>
    {error&&<div className="mt-3 rounded-lg border border-danger/25 bg-danger/5 p-3 text-sm text-danger">{error}</div>}
    <div className="mt-5 flex flex-wrap justify-end gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-text-muted">Close</button>{status?.bridge_enabled&&<><button onClick={()=>createOrRefresh("refresh")} disabled={connecting} className="flex items-center gap-1 rounded-lg border border-border px-4 py-2 text-sm text-text-muted"><RefreshCw size={14}/> Refresh token</button><button onClick={revoke} className="flex items-center gap-1 rounded-lg border border-danger/30 px-4 py-2 text-sm text-danger"><Ban size={14}/> Revoke</button></>}<button onClick={()=>createOrRefresh("register")} disabled={connecting} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg">{connecting?"Generating…":status?.bridge_enabled?"Generate new token":"Generate token"}</button></div>
   </> : <div className="space-y-4">
