@@ -1,19 +1,15 @@
 "use client";
+
 import { useState } from "react";
-import { X } from "lucide-react";
+import { X, Copy, CheckCircle2, Monitor, ShieldCheck } from "lucide-react";
 import { getAccessToken } from "@/lib/supabase";
 
 export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose:()=>void;onConnected?:(accountId:string)=>void}){
- const [login,setLogin]=useState("");
- const [password,setPassword]=useState("");
- const [server,setServer]=useState("");
- const [label,setLabel]=useState("");
  const [connecting,setConnecting]=useState(false);
  const [error,setError]=useState<string|null>(null);
- const [saved,setSaved]=useState(false);
- const [bridgePending,setBridgePending]=useState(false);
  const [bridgeToken,setBridgeToken]=useState<string|null>(null);
- const [bridgeError,setBridgeError]=useState<string|null>(null);
+ const [accountId,setAccountId]=useState<string|null>(null);
+ const [copied,setCopied]=useState(false);
  if(!open)return null;
 
  async function readError(res:Response,fallback:string){
@@ -21,62 +17,54 @@ export function ConnectMT5Modal({open,onClose,onConnected}:{open:boolean;onClose
   return typeof body?.detail==="string"?body.detail:fallback;
  }
 
- async function handleSubmit(e:React.FormEvent){
-  e.preventDefault();
-  setError(null);setBridgeError(null);
-  const loginNumber=parseInt(login,10);
-  if(!loginNumber||!password||!server){setError("Enter your MT5 account number, password, and server.");return}
-  setConnecting(true);
+ async function connect(){
+  setError(null);setConnecting(true);
   try{
    const token=await getAccessToken();
-   if(!token)throw new Error("Please sign in again before connecting your MetaTrader 5 account.");
-   const h={"Content-Type":"application/json",Authorization:`Bearer ${token}`};
-   const res=await fetch("/api/broker-accounts/mt5",{method:"POST",headers:h,body:JSON.stringify({login:loginNumber,password,server:server.trim(),label:label||undefined})});
-   if(!res.ok)throw new Error(await readError(res,"We couldn't save the MT5 connection right now. Please try again."));
+   if(!token)throw new Error("Please sign in again before connecting MetaTrader 5.");
+   const h={Authorization:`Bearer ${token}`};
+   const res=await fetch("/api/mt5-bridge/register",{method:"POST",headers:h});
+   if(!res.ok)throw new Error(await readError(res,"Could not create the secure MT5 connection."));
    const data=await res.json();
-   if(!data?.broker_account_id)throw new Error("The MT5 account was not returned by the server. Please try again.");
+   if(!data?.bridge_token)throw new Error("The secure MT5 connection token was not returned.");
+   setBridgeToken(data.bridge_token);
+   setAccountId(data.broker_account_id||null);
+   if(data.broker_account_id)onConnected?.(data.broker_account_id);
+  }catch(e){setError(e instanceof Error?e.message:"Could not connect MetaTrader 5.")}finally{setConnecting(false)}
+ }
 
-   setSaved(true);
-   onConnected?.(data.broker_account_id);
-   setLogin("");setPassword("");setServer("");setLabel("");
-
-   try{
-    setBridgePending(true);
-    const reg=await fetch("/api/mt5-bridge/register",{method:"POST",headers:h});
-    if(!reg.ok)throw new Error(await readError(reg,"Bridge registration failed."));
-    const bridge=await reg.json().catch(()=>null);
-    if(!bridge?.bridge_token)throw new Error("The bridge token was not returned by the server.");
-    setBridgeToken(bridge.bridge_token);
-   }catch(e){
-    setBridgeError(e instanceof Error?e.message:"Bridge registration failed.");
-   }finally{setBridgePending(false);}
-  }catch(e){setError(e instanceof Error?e.message:"We couldn't complete the MT5 connection. Please try again.")}finally{setConnecting(false)}
+ async function copyToken(){
+  if(!bridgeToken)return;
+  await navigator.clipboard.writeText(bridgeToken);
+  setCopied(true);setTimeout(()=>setCopied(false),1600);
  }
 
  return <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
   <div className="absolute inset-0 bg-black/60" onClick={onClose}/>
-  <div className="relative w-full max-w-md rounded-lg border border-border bg-bg-panel p-6">
+  <div className="relative w-full max-w-lg rounded-xl border border-border bg-bg-panel p-6 shadow-xl">
    <div className="mb-1 flex items-center justify-between"><h2 className="text-base font-semibold">Connect MetaTrader 5</h2><button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Close"><X size={18}/></button></div>
-   <p className="mb-4 text-xs text-text-faint">Use the same account details as your MT5 terminal. Keep MetaTrader 5 open on the Windows PC running the ManiQuantAI bridge.</p>
-   {saved?
-    <div className="space-y-3">
-     <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">MT5 account saved</p><p className="mt-1 text-xs text-text-muted">The account credentials are stored. This does not mean the Windows bridge is online yet.</p></div>
-     {bridgeToken ?
-      <div className="rounded-lg border border-accent/30 bg-accent-dim p-3"><p className="text-xs font-medium text-accent">Bridge token created</p><p className="mt-1 text-xs text-text-muted">Keep MetaTrader 5 open and run the ManiQuantAI MT5 Bridge on the same Windows PC. Copy this token into its configuration:</p><code className="mt-2 block break-all rounded bg-bg p-2 text-[11px] text-text">{bridgeToken}</code></div>
-      : bridgePending ?
-      <div className="rounded-lg border border-border bg-bg-raised p-3"><p className="text-xs font-medium text-text">Registering bridge…</p><p className="mt-1 text-xs text-text-muted">The MT5 account is saved. Waiting for bridge registration to finish.</p></div>
-      :
-      <div className="rounded-lg border border-danger/25 bg-danger/5 p-3"><p className="text-xs font-medium text-danger">MT5 bridge is not registered</p><p className="mt-1 text-xs text-text-muted">{bridgeError||"Run the bridge registration again before starting live execution."}</p></div>}
-     <button onClick={onClose} className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg">Done</button>
+   {!bridgeToken ? <>
+    <p className="mt-2 text-sm leading-6 text-text-muted">Connect your own MT5 terminal to ManiQuantAI. Your broker password is <strong className="text-text">never entered into ManiQuantAI</strong>.</p>
+    <div className="mt-5 grid gap-3 sm:grid-cols-3">
+      <Info icon={<ShieldCheck size={16}/>} title="Secure token" text="A short-lived connection token links this terminal to your account."/>
+      <Info icon={<Monitor size={16}/>} title="Your computer" text="MT5 runs on your Windows PC. No ManiQuantAI VPS is required."/>
+      <Info icon={<CheckCircle2 size={16}/>} title="You control it" text="Keep AutoTrading enabled only when you want live execution."/>
     </div>
-    :<form onSubmit={handleSubmit} className="space-y-3">
-     <div><label className="mb-1 block text-xs text-text-muted">Login (account number)</label><input type="text" inputMode="numeric" value={login} onChange={e=>setLogin(e.target.value.replace(/\D/g,""))} placeholder="12345678" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"/></div>
-     <div><label className="mb-1 block text-xs text-text-muted">Password</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Your MT5 password" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"/></div>
-     <div><label className="mb-1 block text-xs text-text-muted">Server</label><input type="text" value={server} onChange={e=>setServer(e.target.value)} placeholder="e.g. Exness-Real" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"/></div>
-     <div><label className="mb-1 block text-xs text-text-muted">Nickname (optional)</label><input type="text" value={label} onChange={e=>setLabel(e.target.value)} placeholder="My MT5 account" className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-text"/></div>
-     {error&&<div className="rounded-lg border border-danger/25 bg-danger/5 p-3 text-sm text-danger">{error}</div>}
-     <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-text-muted">Cancel</button><button type="submit" disabled={connecting} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg disabled:opacity-40">{connecting?"Connecting…":"Connect account"}</button></div>
-    </form>}
+    <div className="mt-5 rounded-lg border border-border bg-bg-raised p-4 text-xs text-text-muted">
+      <div className="font-medium text-text">How it works</div>
+      <ol className="mt-2 space-y-1.5 list-decimal pl-4"><li>Click Connect and copy the generated token.</li><li>Open MetaTrader 5 and log into your broker account normally.</li><li>Start the ManiQuantAI Windows MT5 Bridge on the same PC and paste the token into its configuration.</li><li>Keep MT5 and the bridge running while automatic trading is enabled.</li></ol>
+    </div>
+    {error&&<div className="mt-3 rounded-lg border border-danger/25 bg-danger/5 p-3 text-sm text-danger">{error}</div>}
+    <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-border px-4 py-2 text-sm text-text-muted">Cancel</button><button onClick={connect} disabled={connecting} className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg disabled:opacity-40">{connecting?"Creating secure connection…":"Connect MT5"}</button></div>
+   </> : <div className="space-y-4">
+    <div className="rounded-lg border border-accent/30 bg-accent-dim p-4"><p className="text-xs font-medium text-accent">MetaTrader 5 connection created</p><p className="mt-1 text-xs leading-5 text-text-muted">Account linking is complete on the ManiQuantAI side. Now connect the local bridge to the MT5 terminal where you are already logged into your broker.</p></div>
+    <div><label className="mb-1 block text-xs text-text-muted">Bridge token</label><div className="flex gap-2"><code className="min-w-0 flex-1 break-all rounded-lg border border-border bg-bg px-3 py-2 text-[11px] text-text">{bridgeToken}</code><button onClick={copyToken} className="shrink-0 rounded-lg border border-border px-3 text-xs text-text-muted hover:text-text" aria-label="Copy bridge token">{copied?<CheckCircle2 size={16}/>:<Copy size={16}/>}</button></div></div>
+    <div className="rounded-lg border border-border bg-bg-raised p-4 text-xs leading-5 text-text-muted"><strong className="text-text">Important:</strong> Do not send this token to anyone. It authorizes the local bridge to receive approved market-data and live-execution jobs for your ManiQuantAI account.</div>
+    <div className="rounded-lg border border-border p-4 text-xs text-text-muted"><div className="font-medium text-text">Next step</div><div className="mt-1">Configure <code className="text-text">MANIQUANT_API_URL</code> and <code className="text-text">MT5_BRIDGE_TOKEN</code> in the ManiQuantAI Windows Bridge, then start it with MetaTrader 5 already open.</div>{accountId&&<div className="mt-2 text-[11px] text-text-faint">Connector: {accountId}</div>}</div>
+    <button onClick={onClose} className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-bg">Done</button>
+   </div>}
   </div>
  </div>
 }
+
+function Info({icon,title,text}:{icon:React.ReactNode;title:string;text:string}){return <div className="rounded-lg border border-border bg-bg-raised p-3"><div className="flex items-center gap-2 text-accent">{icon}<span className="text-xs font-medium text-text">{title}</span></div><p className="mt-1.5 text-[11px] leading-4 text-text-faint">{text}</p></div>}
