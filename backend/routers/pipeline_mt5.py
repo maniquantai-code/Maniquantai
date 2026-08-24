@@ -47,8 +47,21 @@ async def save(sid: str, uid: str, token: str, state: dict[str, Any], status: st
 
 
 async def connected(uid: str, token: str) -> bool:
+    """Only treat MT5 as connected after a recent local-bridge heartbeat."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"{SB}/rest/v1/broker_accounts", headers=h(token), params={"user_id": f"eq.{uid}", "connector_type": "eq.mt5", "select": "id", "limit": "1"})
+        r = await c.get(
+            f"{SB}/rest/v1/broker_accounts",
+            headers=h(token),
+            params={
+                "user_id": f"eq.{uid}",
+                "connector_type": "eq.mt5",
+                "bridge_enabled": "eq.true",
+                "last_verified_at": f"gte.{cutoff}",
+                "select": "id,last_verified_at",
+                "limit": "1",
+            },
+        )
     if not r.is_success:
         raise RuntimeError("Could not verify MT5 connection")
     return bool(r.json())
