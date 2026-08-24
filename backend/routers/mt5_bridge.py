@@ -14,16 +14,11 @@ from .auth import get_current_user
 
 api_router = APIRouter(prefix="/api/mt5-bridge", tags=["mt5-bridge"])
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-# Keep the bridge router aligned with the existing auth helper. In Vercel,
-# deployments that do not define SUPABASE_ANON_KEY may still have the public
-# Supabase key under one of the standard publishable-key names. This key is
-# intentionally public/publishable; user authorization still comes from the
-# verified Supabase JWT.
 SUPABASE_ANON_KEY = (
     os.getenv("SUPABASE_ANON_KEY")
     or os.getenv("SUPABASE_PUBLISHABLE_KEY")
     or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    or "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
+    or ""
 ).strip()
 BRIDGE_PEPPER = os.getenv("MT5_BRIDGE_PEPPER", "").strip()
 BRIDGE_ONLINE_SECONDS = 15
@@ -31,6 +26,8 @@ BRIDGE_TOKEN_DAYS = 30
 
 
 def _api_headers(token: str | None = None) -> dict[str, str]:
+    if not SUPABASE_ANON_KEY:
+        raise HTTPException(500, "Supabase publishable key is not configured")
     headers = {"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -85,15 +82,7 @@ async def _rpc(name: str, payload: dict[str, Any], token: str | None = None, tim
 
 
 async def _ensure_mt5_account(user: dict[str, Any]) -> str:
-    """Create the MT5 bridge record before the terminal has connected.
-
-    Token generation is an authorization step, not proof that MT5 is online.
-    The old flow incorrectly required a broker_accounts row to already exist,
-    which made the first Generate Token click fail with P0001. This creates a
-    minimal non-credentialed MT5 connector record. The Windows bridge later
-    supplies the real terminal/account details through its authenticated
-    heartbeat/job completion flow.
-    """
+    """Create the non-credentialed MT5 connector record before terminal connection."""
     uid = user["id"]
     access_token = user.get("access_token") or user.get("_access_token")
     if not access_token:
@@ -121,6 +110,7 @@ async def _ensure_mt5_account(user: dict[str, Any]) -> str:
             "bridge_enabled": False,
             "is_primary": False,
             "last_verified_at": None,
+            "encrypted_payload": None,
         }
         created = await c.post(
             f"{SUPABASE_URL}/rest/v1/broker_accounts",
@@ -128,7 +118,9 @@ async def _ensure_mt5_account(user: dict[str, Any]) -> str:
             json=payload,
         )
         if not created.is_success:
-            raise HTTPException(502, "Could not initialize the MetaTrader 5 bridge record")
+            # Keep the client-facing error safe while preserving the useful HTTP status.
+            detail = created.text[:300].replace("\n", " ")
+            raise HTTPException(502, f"Could not initialize the MetaTrader 5 bridge record: {detail}")
         result = created.json() or []
         if not result or not result[0].get("id"):
             raise HTTPException(502, "MetaTrader 5 bridge record was not created")
