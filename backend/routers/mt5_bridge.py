@@ -14,15 +14,23 @@ from .auth import get_current_user
 
 api_router = APIRouter(prefix="/api/mt5-bridge", tags=["mt5-bridge"])
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+# Keep the bridge router aligned with the existing auth helper. In Vercel,
+# deployments that do not define SUPABASE_ANON_KEY may still have the public
+# Supabase key under one of the standard publishable-key names. This key is
+# intentionally public/publishable; user authorization still comes from the
+# verified Supabase JWT.
+SUPABASE_ANON_KEY = (
+    os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    or "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
+).strip()
 BRIDGE_PEPPER = os.getenv("MT5_BRIDGE_PEPPER", "").strip()
 BRIDGE_ONLINE_SECONDS = 15
 BRIDGE_TOKEN_DAYS = 30
 
 
 def _api_headers(token: str | None = None) -> dict[str, str]:
-    if not SUPABASE_ANON_KEY:
-        raise HTTPException(503, "MT5 bridge service is temporarily unavailable")
     headers = {"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
