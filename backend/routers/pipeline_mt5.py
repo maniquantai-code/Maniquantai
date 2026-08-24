@@ -14,12 +14,7 @@ from .auth import get_current_user
 
 api_router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 SB = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-ANON = (
-    os.getenv("SUPABASE_ANON_KEY")
-    or os.getenv("SUPABASE_PUBLISHABLE_KEY")
-    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    or "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X"
-).strip()
+ANON = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X").strip()
 SERVICE = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 
@@ -52,11 +47,7 @@ async def save(sid: str, uid: str, token: str, state: dict[str, Any], status: st
 
 
 async def connected(uid: str, token: str) -> bool:
-    """True only when the local bridge has recently authenticated with MT5.
-
-    Merely generating a bridge token creates an authorization record; it does
-    not mean a MetaTrader terminal is running or logged into a broker account.
-    """
+    """Only treat MT5 as connected after a recent local-bridge heartbeat."""
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(
@@ -110,7 +101,10 @@ def _criteria(s: dict[str, Any]) -> dict[str, Any]:
         "instrument": s["symbol"],
         "timeframe": s["timeframe"],
         "lookback_days": s["lookback_days"],
-        "entry": [f"RSI({s['rsi_period']}) < {s['rsi_entry_below']:g}", f"Low touches Bollinger lower band ({s['bollinger_period']}, {s['bollinger_std']:g}σ)"],
+        "entry": [
+            f"RSI({s['rsi_period']}) < {s['rsi_entry_below']:g}",
+            f"Low touches Bollinger lower band ({s['bollinger_period']}, {s['bollinger_std']:g}σ)",
+        ],
         "exit": [f"RSI({s['rsi_period']}) >= {s['rsi_exit_above']:g}"] + ([f"Maximum hold {s['max_hold_hours']} hours"] if s.get("max_hold_hours") else []),
         "risk": f"{s['risk_pct']:g}% per trade",
         "indicators": [f"RSI {s['rsi_period']}", f"Bollinger Bands {s['bollinger_period']} / {s['bollinger_std']:g}σ"],
@@ -143,17 +137,17 @@ def bb(v: list[float], p: int, k: float) -> list[tuple[float, float, float] | No
     return out
 
 
-def bt(v: list[dict[str, float | int]], s: dict[str, Any]) -> dict[str, Any]:
-    closes = [float(x["close"]) for x in v]
-    lows = [float(x["low"]) for x in v]
-    times = [int(x["ts"]) for x in v]
+def bt(rows: list[dict[str, float | int]], s: dict[str, Any]) -> dict[str, Any]:
+    closes = [float(x["close"]) for x in rows]
+    lows = [float(x["low"]) for x in rows]
+    times = [int(x["ts"]) for x in rows]
     rr = rsi(closes, s["rsi_period"])
     bands = bb(closes, s["bollinger_period"], s["bollinger_std"])
     entry: tuple[float, int] | None = None
     trades: list[dict[str, Any]] = []
     returns: list[float] = []
     hold = s["max_hold_hours"] * 3600000 if s.get("max_hold_hours") else None
-    for i in range(1, len(v)):
+    for i in range(1, len(rows)):
         if entry is None:
             if rr[i] is not None and bands[i] and rr[i] < s["rsi_entry_below"] and lows[i] <= bands[i][1]:
                 entry = (closes[i], times[i])
@@ -176,7 +170,14 @@ def bt(v: list[dict[str, float | int]], s: dict[str, Any]) -> dict[str, Any]:
     variance = sum((x - mean) ** 2 for x in returns) / len(returns) if returns else 0.0
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
-    metrics = {"total_trades": len(returns), "trade_count": len(returns), "wins": len(wins), "losses": len(losses), "win_rate": round(len(wins) * 100 / len(returns), 2) if returns else 0.0, "total_return_pct": round((equity - 1) * 100, 2), "max_drawdown_pct": round(drawdown * 100, 2), "sharpe_ratio": round(mean / math.sqrt(variance) * math.sqrt(252), 3) if variance else 0.0, "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else 0.0, "risk_pct": s["risk_pct"], "final_equity_index": round(equity, 6)}
+    metrics = {
+        "total_trades": len(returns), "trade_count": len(returns), "wins": len(wins), "losses": len(losses),
+        "win_rate": round(len(wins) * 100 / len(returns), 2) if returns else 0.0,
+        "total_return_pct": round((equity - 1) * 100, 2), "max_drawdown_pct": round(drawdown * 100, 2),
+        "sharpe_ratio": round(mean / math.sqrt(variance) * math.sqrt(252), 3) if variance else 0.0,
+        "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else 0.0,
+        "risk_pct": s["risk_pct"], "final_equity_index": round(equity, 6),
+    }
     return {"metrics": metrics, "trades": trades[-100:]}
 
 
@@ -195,6 +196,166 @@ def resample(rows: list[dict[str, float | int]], width: int = 14400000) -> list[
     return [{"ts": k, "open": g[0]["open"], "high": max(z["high"] for z in g), "low": min(z["low"] for z in g), "close": g[-1]["close"]} for k, g in sorted(buckets.items())]
 
 
-def _remaining_pipeline_code_placeholder() -> None:
-    # The rest of this module is intentionally unchanged from main.
-    pass
+async def yahoo(symbol: str, tf: str, days: int) -> list[dict[str, float | int]]:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    interval = yi(tf)
+    if interval in {"1m", "5m", "15m", "30m", "60m"}:
+        start = max(start, end - timedelta(days=59))
+    async with httpx.AsyncClient(timeout=25, headers={"User-Agent": "Mozilla/5.0"}) as c:
+        r = await c.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{yf_symbol(symbol)}", params={"period1": int(start.timestamp()), "period2": int(end.timestamp()), "interval": interval, "events": "history"})
+    r.raise_for_status()
+    result = r.json().get("chart", {}).get("result", [None])[0]
+    if not result:
+        raise RuntimeError("Yahoo Finance returned no market data")
+    q = result["indicators"]["quote"][0]
+    rows: list[dict[str, float | int]] = []
+    for i, ts in enumerate(result.get("timestamp", [])):
+        try:
+            rows.append({"ts": int(ts) * 1000, "open": float(q["open"][i]), "high": float(q["high"][i]), "low": float(q["low"][i]), "close": float(q["close"][i])})
+        except (TypeError, ValueError, KeyError, IndexError):
+            pass
+    return resample(rows) if tf == "4h" else rows
+
+
+async def mt5(uid: str, sid: str, s: dict[str, Any]) -> list[dict[str, float | int]]:
+    now = datetime.now(timezone.utc)
+    payload = {"user_id": uid, "strategy_id": sid, "symbol": s["symbol"], "timeframe": s["timeframe"], "date_from": (now - timedelta(days=s["lookback_days"])).isoformat(), "date_to": now.isoformat(), "status": "queued"}
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.post(f"{SB}/rest/v1/mt5_bridge_jobs", headers=sh(), json=payload)
+    if not r.is_success:
+        raise RuntimeError("Could not queue MT5 market-data request")
+    job_id = r.json()[0]["id"]
+    deadline = asyncio.get_running_loop().time() + 90
+    while asyncio.get_running_loop().time() < deadline:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{SB}/rest/v1/mt5_bridge_jobs", headers=sh(), params={"id": f"eq.{job_id}", "select": "status,rates,error", "limit": "1"})
+        row = r.json()[0] if r.is_success and r.json() else None
+        if row and row["status"] == "complete":
+            return [{"ts": int(x["time"]) * 1000, "open": float(x["open"]), "high": float(x["high"]), "low": float(x["low"]), "close": float(x["close"])} for x in row["rates"]]
+        if row and row["status"] == "failed":
+            raise RuntimeError(row.get("error") or "MT5 bridge failed")
+        await asyncio.sleep(2)
+    raise RuntimeError("MT5 terminal did not respond in time")
+
+
+async def _get_rows(uid: str, sid: str, s: dict[str, Any]) -> tuple[list[dict[str, float | int]], str]:
+    try:
+        return await mt5(uid, sid, s), "MT5"
+    except Exception as mt5_error:
+        try:
+            rows = await yahoo(s["symbol"], s["timeframe"], s["lookback_days"])
+            return rows, "Yahoo Finance"
+        except Exception as yahoo_error:
+            raise RuntimeError(f"Market data is temporarily unavailable. Please keep MetaTrader 5 open and connected, then retry. ({str(mt5_error)[:160]}; {str(yahoo_error)[:160]})")
+
+
+async def run_research(strategy_id: str, user_id: str, token: str) -> None:
+    """Research only. It stops at the explicit backtest confirmation gate."""
+    try:
+        if not await connected(user_id, token):
+            state = (await load(strategy_id, user_id, token)).get("spec") or {}
+            state["pipeline_stage"] = "awaiting_mt5_connection"
+            state["pending_confirmation"] = "mt5_connection"
+            state["agents"] = {**state.get("agents", {}), "research": "idle", "backtest": "idle", "indicator": "gated", "paper": "gated", "approval": "gated", "live": "gated"}
+            _activity(state, "MT5 connection required", "Connect your MetaTrader 5 account before research can begin.", "blocked")
+            await save(strategy_id, user_id, token, state, "awaiting_mt5")
+            return
+
+        strategy = await load(strategy_id, user_id, token)
+        state = strategy.get("spec") or {}
+        spec = parse(strategy.get("raw_strategy_text") or "")
+        state["parsed_strategy"] = spec
+        state["research_criteria"] = _criteria(spec)
+        state["pipeline_stage"] = "research_running"
+        state["pending_confirmation"] = None
+        state["agents"] = {**state.get("agents", {}), "research": "running", "backtest": "queued", "indicator": "gated", "paper": "gated", "approval": "gated", "live": "gated"}
+        _activity(state, "Research Agent started", f"Analysing {spec['symbol']} on {spec['timeframe']} using the defined RSI/Bollinger rules.", "running")
+        await save(strategy_id, user_id, token, state, "research")
+
+        rows, source = await _get_rows(user_id, strategy_id, spec)
+        minimum = max(spec["rsi_period"], spec["bollinger_period"]) + 5
+        if len(rows) < minimum:
+            raise RuntimeError("Not enough market data for the requested indicators")
+        closes = [float(x["close"]) for x in rows]
+        rr = rsi(closes, spec["rsi_period"])
+        bands = bb(closes, spec["bollinger_period"], spec["bollinger_std"])
+        valid = sum(1 for i in range(len(rows)) if rr[i] is not None and bands[i] is not None)
+        entry_candidates = sum(1 for i in range(len(rows)) if rr[i] is not None and bands[i] and rr[i] < spec["rsi_entry_below"] and float(rows[i]["low"]) <= bands[i][1])
+        state["data_source"] = source
+        state["data_source_message"] = "Market data is coming from your MetaTrader 5 account." if source == "MT5" else "The primary broker feed was unavailable, so the configured market-data fallback was used."
+        state["bars_loaded"] = len(rows)
+        state["research"] = {"status": "complete", "bars_checked": len(rows), "indicator_ready_bars": valid, "entry_candidates": entry_candidates, "criteria": state["research_criteria"], "data_source": source}
+        state["pipeline_stage"] = "research_complete"
+        state["pending_confirmation"] = "backtest"
+        state["agents"] = {**state.get("agents", {}), "research": "complete", "backtest": "gated", "indicator": "gated", "paper": "gated", "approval": "gated", "live": "gated"}
+        _activity(state, "Research Agent complete", f"Research verified {len(rows):,} bars and found {entry_candidates:,} historical entry candidates. Deterministic backtest is ready for confirmation.")
+        await save(strategy_id, user_id, token, state, "research_complete")
+    except Exception as exc:
+        try:
+            state = (await load(strategy_id, user_id, token)).get("spec") or {}
+            state["pipeline_stage"] = "research_failed"
+            state["error"] = "Research could not be completed. Please keep MetaTrader 5 open and connected, then retry."
+            state["agents"] = {**state.get("agents", {}), "research": "failed", "backtest": "gated"}
+            _activity(state, "Research Agent failed", str(exc)[:240], "failed")
+            await save(strategy_id, user_id, token, state, "research_failed")
+        except Exception:
+            pass
+
+
+async def run_backtest(strategy_id: str, user_id: str, token: str) -> None:
+    """Deterministic backtest after the user confirms the research hand-off."""
+    try:
+        if not await connected(user_id, token):
+            state = (await load(strategy_id, user_id, token)).get("spec") or {}
+            state["pipeline_stage"] = "awaiting_mt5_connection"
+            state["pending_confirmation"] = "mt5_connection"
+            _activity(state, "Backtest paused", "Reconnect MetaTrader 5 before the deterministic backtest can continue.", "blocked")
+            await save(strategy_id, user_id, token, state, "awaiting_mt5")
+            return
+        strategy = await load(strategy_id, user_id, token)
+        state = strategy.get("spec") or {}
+        spec = state.get("parsed_strategy") or parse(strategy.get("raw_strategy_text") or "")
+        state["backtest_criteria"] = _criteria(spec)
+        state["pipeline_stage"] = "backtest_running"
+        state["pending_confirmation"] = None
+        state["agents"] = {**state.get("agents", {}), "research": "complete", "backtest": "running", "indicator": "running", "paper": "gated", "approval": "gated", "live": "gated"}
+        _activity(state, "Deterministic Backtest Agent started", f"Testing {spec['symbol']} with the exact research criteria; no LLM-generated performance numbers are used.", "running")
+        await save(strategy_id, user_id, token, state, "backtesting")
+
+        rows, source = await _get_rows(user_id, strategy_id, spec)
+        result = bt(rows, spec)
+        state["data_source"] = source
+        state["bars_loaded"] = len(rows)
+        state["backtest"] = {**result, "symbol": spec["symbol"], "timeframe": spec["timeframe"], "period_days": spec["lookback_days"], "data_source": source}
+        state["pipeline_stage"] = "backtest_complete"
+        state["pending_confirmation"] = "approval"
+        state["agents"] = {**state.get("agents", {}), "research": "complete", "backtest": "complete", "indicator": "complete", "paper": "gated", "approval": "current", "live": "gated"}
+        m = result["metrics"]
+        _activity(state, "Deterministic Backtest complete", f"{m['trade_count']} trades · {m['win_rate']}% win rate · {m['total_return_pct']}% return · {m['max_drawdown_pct']}% max drawdown.")
+        await save(strategy_id, user_id, token, state, "backtest_complete")
+    except Exception as exc:
+        try:
+            state = (await load(strategy_id, user_id, token)).get("spec") or {}
+            state["pipeline_stage"] = "backtest_failed"
+            state["error"] = "The deterministic backtest could not be completed. Please keep MetaTrader 5 open and connected, then retry."
+            state["agents"] = {**state.get("agents", {}), "backtest": "failed"}
+            _activity(state, "Deterministic Backtest failed", str(exc)[:240], "failed")
+            await save(strategy_id, user_id, token, state, "backtest_failed")
+        except Exception:
+            pass
+
+
+async def run_pipeline(strategy_id: str, user_id: str, token: str) -> None:
+    """Compatibility entry point: research only; backtest remains user-confirmed."""
+    await run_research(strategy_id, user_id, token)
+
+
+@api_router.get("/status/{strategy_id}")
+async def status(strategy_id: str, user=Depends(get_current_user)):
+    token = user.get("_access_token") or user.get("access_token")
+    if not token:
+        raise HTTPException(401, "Missing access token")
+    strategy = await load(strategy_id, user["id"], token)
+    state = strategy.get("spec") or {}
+    return {"strategy_id": strategy_id, "status": strategy.get("status"), "pipeline_stage": state.get("pipeline_stage"), "agents": state.get("agents", {}), "activity": state.get("activity", []), "research": state.get("research"), "research_criteria": state.get("research_criteria"), "backtest": state.get("backtest"), "backtest_criteria": state.get("backtest_criteria"), "data_source": state.get("data_source"), "bars_loaded": state.get("bars_loaded"), "error": state.get("error")}
