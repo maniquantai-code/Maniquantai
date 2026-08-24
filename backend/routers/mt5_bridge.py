@@ -84,17 +84,78 @@ async def _rpc(name: str, payload: dict[str, Any], token: str | None = None, tim
     return r.json()
 
 
+async def _ensure_mt5_account(user: dict[str, Any]) -> str:
+    """Create the MT5 bridge record before the terminal has connected.
+
+    Token generation is an authorization step, not proof that MT5 is online.
+    The old flow incorrectly required a broker_accounts row to already exist,
+    which made the first Generate Token click fail with P0001. This creates a
+    minimal non-credentialed MT5 connector record. The Windows bridge later
+    supplies the real terminal/account details through its authenticated
+    heartbeat/job completion flow.
+    """
+    uid = user["id"]
+    access_token = user.get("access_token") or user.get("_access_token")
+    if not access_token:
+        raise HTTPException(401, "Missing access token")
+    headers = _api_headers(access_token)
+    params = {
+        "user_id": f"eq.{uid}",
+        "connector_type": "eq.mt5",
+        "select": "id",
+        "order": "created_at.desc",
+        "limit": "1",
+    }
+    async with httpx.AsyncClient(timeout=10) as c:
+        existing = await c.get(f"{SUPABASE_URL}/rest/v1/broker_accounts", headers=headers, params=params)
+        if not existing.is_success:
+            raise HTTPException(502, "Could not check the MetaTrader 5 bridge record")
+        rows = existing.json() or []
+        if rows:
+            return rows[0]["id"]
+        payload = {
+            "user_id": uid,
+            "connector_type": "mt5",
+            "connector_name": "MetaTrader 5",
+            "label": "ManiQuantAI MT5 Bridge",
+            "bridge_enabled": False,
+            "is_primary": False,
+            "last_verified_at": None,
+        }
+        created = await c.post(
+            f"{SUPABASE_URL}/rest/v1/broker_accounts",
+            headers={**headers, "Prefer": "return=representation"},
+            json=payload,
+        )
+        if not created.is_success:
+            raise HTTPException(502, "Could not initialize the MetaTrader 5 bridge record")
+        result = created.json() or []
+        if not result or not result[0].get("id"):
+            raise HTTPException(502, "MetaTrader 5 bridge record was not created")
+        return result[0]["id"]
+
+
 @api_router.post("/register")
 async def register(user=Depends(get_current_user)):
+    await _ensure_mt5_account(user)
     token, token_hash, expires_at = _new_token()
-    result = await _rpc("mt5_register_bridge", {"p_token_hash": token_hash, "p_expires_at": expires_at}, token=user["access_token"])
+    result = await _rpc(
+        "mt5_register_bridge",
+        {"p_token_hash": token_hash, "p_expires_at": expires_at},
+        token=user["access_token"],
+    )
     return {"bridge_token": token, "broker_account_id": result.get("broker_account_id"), "expires_at": expires_at}
 
 
 @api_router.post("/refresh")
 async def refresh(user=Depends(get_current_user)):
+    await _ensure_mt5_account(user)
     token, token_hash, expires_at = _new_token()
-    result = await _rpc("mt5_rotate_bridge", {"p_token_hash": token_hash, "p_expires_at": expires_at}, token=user["access_token"])
+    result = await _rpc(
+        "mt5_rotate_bridge",
+        {"p_token_hash": token_hash, "p_expires_at": expires_at},
+        token=user["access_token"],
+    )
     return {"bridge_token": token, "broker_account_id": result.get("broker_account_id"), "expires_at": expires_at}
 
 
@@ -115,7 +176,19 @@ async def jobs(token: str):
 
 
 async def _complete(job_id: str, token: str, *, status: str, rates=None, account=None, error=None, result=None):
-    await _rpc("mt5_complete_job", {"p_token_hash": _hash(token), "p_job_id": job_id, "p_status": status, "p_rates": rates, "p_account": account, "p_error": error, "p_result": result}, timeout=30)
+    await _rpc(
+        "mt5_complete_job",
+        {
+            "p_token_hash": _hash(token),
+            "p_job_id": job_id,
+            "p_status": status,
+            "p_rates": rates,
+            "p_account": account,
+            "p_error": error,
+            "p_result": result,
+        },
+        timeout=30,
+    )
     return {"ok": True}
 
 
@@ -136,7 +209,18 @@ async def fail(job_id: str, req: Fail):
 async def _bridge_online(user_id: str, access_token: str) -> bool:
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=BRIDGE_ONLINE_SECONDS)).isoformat()
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.get(f"{SUPABASE_URL}/rest/v1/broker_accounts", headers=_api_headers(access_token), params={"user_id": f"eq.{user_id}", "connector_type": "eq.mt5", "bridge_enabled": "eq.true", "last_verified_at": f"gte.{cutoff}", "select": "id", "limit": "1"})
+        r = await c.get(
+            f"{SUPABASE_URL}/rest/v1/broker_accounts",
+            headers=_api_headers(access_token),
+            params={
+                "user_id": f"eq.{user_id}",
+                "connector_type": "eq.mt5",
+                "bridge_enabled": "eq.true",
+                "last_verified_at": f"gte.{cutoff}",
+                "select": "id",
+                "limit": "1",
+            },
+        )
     if not r.is_success:
         raise HTTPException(502, "Could not verify the MetaTrader 5 bridge")
     return bool(r.json())
@@ -149,7 +233,18 @@ async def queue_execution(req: ExecutionRequest, strategy_id: str, user=Depends(
     if not await _bridge_online(user["id"], user["access_token"]):
         raise HTTPException(409, "MetaTrader 5 bridge is offline. Start the Windows bridge before sending a live order.")
     try:
-        job_id = await _rpc("mt5_queue_execution", {"p_strategy_id": strategy_id, "p_symbol": req.symbol.upper(), "p_timeframe": "15m", "p_request": req.model_dump(), "p_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()}, token=user["access_token"], timeout=15)
+        job_id = await _rpc(
+            "mt5_queue_execution",
+            {
+                "p_strategy_id": strategy_id,
+                "p_symbol": req.symbol.upper(),
+                "p_timeframe": "15m",
+                "p_request": req.model_dump(),
+                "p_expires_at": (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat(),
+            },
+            token=user["access_token"],
+            timeout=15,
+        )
     except HTTPException as exc:
         if exc.status_code == 502 and "Live trading is waiting" in str(exc.detail):
             raise HTTPException(409, "Live trading is waiting for your explicit approval")
