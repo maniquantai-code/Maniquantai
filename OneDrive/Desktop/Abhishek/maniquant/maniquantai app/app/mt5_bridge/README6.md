@@ -1,0 +1,1 @@
+Keep MetaTrader 5 open while the bridge is running.

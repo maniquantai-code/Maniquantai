@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ManiQuantAI Strategy Specification",
+  "type": "object",
+  "required": ["version", "symbol", "timeframe", "direction", "entry", "exit", "risk", "position", "runtime", "source"],
+  "properties": {
+    "version": {"type": "string"},
+    "symbol": {"type": "string"},
+    "timeframe": {"enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d", "unresolved"]},
+    "direction": {"enum": ["LONG", "SHORT", "BOTH", "unresolved"]},
+    "entry": {"type": "object"},
+    "exit": {"type": "object"},
+    "risk": {"type": "object"},
+    "position": {"type": "object"},
+    "runtime": {"type": "object", "required": ["symbol", "timeframe", "lookback_days", "rsi_period", "rsi_entry_below", "rsi_exit_above", "bollinger_period", "bollinger_std", "risk_pct", "max_hold_hours", "stop_loss", "take_profit"]},
+    "source": {"type": "object", "required": ["user_prompt"], "properties": {"user_prompt": {"type": "string"}}},
+    "unresolved": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": true
+}

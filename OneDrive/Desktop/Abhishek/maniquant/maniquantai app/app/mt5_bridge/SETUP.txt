@@ -1,0 +1,1 @@
+Run on the Windows PC where MetaTrader 5 is installed and logged in. Install requirements, copy .env.example to .env, set the API URL and bridge token from ManiQuantAI, then run agent.py.
