@@ -3,9 +3,5 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- .",
-  "outputDirectory": ".next",
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/index.py?__path=/$1" }
-  ]
+  "outputDirectory": ".next"
 }
