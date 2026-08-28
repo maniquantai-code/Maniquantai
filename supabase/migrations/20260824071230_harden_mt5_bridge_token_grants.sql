@@ -1,0 +1,11 @@
+revoke execute on function public.mt5_register_bridge(text,timestamptz) from anon;
+revoke execute on function public.mt5_revoke_bridge() from anon;
+revoke execute on function public.mt5_rotate_bridge(text,timestamptz) from anon;
+revoke execute on function public.mt5_bridge_status() from anon;
+revoke execute on function public.mt5_register_bridge(text) from anon;
+revoke execute on function public.mt5_claim_jobs(text) from authenticated;
+revoke execute on function public.mt5_complete_job(text,uuid,text,jsonb,jsonb,text,jsonb) from authenticated;
+grant execute on function public.mt5_register_bridge(text,timestamptz) to authenticated;
+grant execute on function public.mt5_revoke_bridge() to authenticated;
+grant execute on function public.mt5_rotate_bridge(text,timestamptz) to authenticated;
+grant execute on function public.mt5_bridge_status() to authenticated;

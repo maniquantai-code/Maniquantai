@@ -1,0 +1,1 @@
+MT5 bridge is read-only and polls the ManiQuantAI API for candle jobs.

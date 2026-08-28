@@ -1,0 +1,1 @@
+Bridge uses HTTPS to communicate with ManiQuantAI.

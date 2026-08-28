@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-bg text-text font-sans;
+}
+
+::selection {
+  @apply bg-accent-dim;
+}
+
+/* Visible keyboard focus, per accessibility floor */
+:focus-visible {
+  outline: 2px solid theme('colors.accent.DEFAULT');
+  outline-offset: 2px;
+}
