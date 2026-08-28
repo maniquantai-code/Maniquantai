@@ -9,8 +9,5 @@
       "runtime": "python3.11",
       "maxDuration": 60
     }
-  },
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index.py?__path=/$1" }
-  ]
+  }
 }
