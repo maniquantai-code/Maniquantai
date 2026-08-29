@@ -3,5 +3,15 @@
   "framework": "nextjs",
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "rewrites": [
+    { "source": "/api/chat", "destination": "/api/index.py" },
+    { "source": "/api/pipeline/:path*", "destination": "/api/index.py" },
+    { "source": "/api/live-trading/:path*", "destination": "/api/index.py" },
+    { "source": "/api/mt5-bridge/:path*", "destination": "/api/index.py" },
+    { "source": "/api/strategies/:path*", "destination": "/api/index.py" },
+    { "source": "/api/broker-accounts/:path*", "destination": "/api/index.py" },
+    { "source": "/api/wallet/:path*", "destination": "/api/index.py" },
+    { "source": "/api/health", "destination": "/api/index.py" }
+  ]
 }
