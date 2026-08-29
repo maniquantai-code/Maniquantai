@@ -4,6 +4,7 @@ Every error produces a helpful, user-friendly message.
 No raw error codes or exception text ever reaches the user.
 """
 from __future__ import annotations
+import os
 
 import logging
 import re
@@ -23,8 +24,8 @@ from .pipeline_mt5 import run_backtest, run_research
 log = logging.getLogger("maniquantai.chat")
 
 api_router = APIRouter(prefix="/api", tags=["chat"])
-SB   = "https://zuimeyynaarjsovnqilk.supabase.co"
-ANON = "sb_publishable_Uf0ECWKkKrH6pzedVbTOA_aNlp1J1X"
+SB = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
+ANON = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X").strip()
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
