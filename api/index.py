@@ -1,25 +1,28 @@
-"""Vercel Python entrypoint for the ManiQuantAI FastAPI backend.
-
-The frontend and backend share one Vercel project. Vercel routes /api/* to
-this function. The FastAPI routers use /api/... prefixes, while health/docs
-are mounted at the backend root, so the wrapper restores the right path.
+"""ManiQuantAI — Vercel Python entrypoint.
+Wraps the FastAPI app. If any import fails, returns a JSON error instead of crashing.
 """
-
 from __future__ import annotations
-
+import json
+import traceback
 from urllib.parse import parse_qsl, urlencode
 
-from backend.main import app as _fastapi_app
-
 _ROOT_ROUTES = {"/", "/health", "/docs", "/redoc", "/openapi.json"}
+_app = None
+_import_error = None
 
+try:
+    from backend.main import app as _fastapi_app
+    _app = _fastapi_app
+except Exception as e:
+    _import_error = traceback.format_exc()
 
 async def app(scope, receive, send):
     if scope.get("type") == "http":
+        # Rewrite path
         query = scope.get("query_string", b"").decode("utf-8", "ignore")
         params = parse_qsl(query, keep_blank_values=True)
         target = None
-        kept: list[tuple[str, str]] = []
+        kept = []
         for key, value in params:
             if key == "__path" and target is None:
                 target = value or "/"
@@ -29,17 +32,26 @@ async def app(scope, receive, send):
         if target is not None:
             if not target.startswith("/"):
                 target = "/" + target
-            # Vercel captures /api/<path> as <path>. Most ManiQuantAI API
-            # routers are mounted under /api, while health/docs are root paths.
             if target not in _ROOT_ROUTES and not target.startswith("/api/"):
                 target = "/api" + target
-
             scope = dict(scope)
             scope["path"] = target
             scope["raw_path"] = target.encode("utf-8")
             scope["query_string"] = urlencode(kept, doseq=True).encode("utf-8")
 
-    await _fastapi_app(scope, receive, send)
+        # If import failed, return helpful JSON error
+        if _app is None:
+            body = json.dumps({
+                "ok": False,
+                "error": "Backend failed to start",
+                "detail": _import_error or "Unknown import error",
+            }).encode()
+            await send({"type": "http.response.start", "status": 500,
+                        "headers": [[b"content-type", b"application/json"],
+                                    [b"access-control-allow-origin", b"*"]]})
+            await send({"type": "http.response.body", "body": body})
+            return
 
+    await _app(scope, receive, send)
 
 __all__ = ["app"]

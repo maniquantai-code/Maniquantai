@@ -1,34 +1,17 @@
-"""ManiQuantAI Backend — FastAPI entry point v2 (Agent Team)."""
+"""ManiQuantAI Backend — FastAPI v2"""
 from __future__ import annotations
-
 import logging
 import os
 import uuid
 
 from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .routers import (
-    llm_router, chat_router, strategies_router, pipeline_router,
-    wallet_router, broker_accounts_router, mt5_bridge_router,
-    live_engine_router, paper_decision_router, strategy_compiler_router,
-    live_trading_router,
-)
-from .routers import auth as auth_module
-from .routers import chat as chat_module
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("maniquantai")
 
-app = FastAPI(
-    title="ManiQuantAI API",
-    version="2.0.0",
-    description="Professional AI trading agent team platform — live crypto execution through MT5.",
-)
-
-chat_module.ANON = auth_module.SUPABASE_ANON_KEY
+app = FastAPI(title="ManiQuantAI API", version="2.0.0")
 
 origins = [
     "https://maniquantai.vercel.app",
@@ -36,44 +19,60 @@ origins = [
     "http://localhost:3000",
 ]
 extra = os.getenv("FRONTEND_URL")
-if extra and extra not in origins:
+if extra:
     origins.append(extra.rstrip("/"))
 
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.middleware("http")
-async def request_id_middleware(request: Request, call_next):
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+# Import routers one by one — if one fails, others still work
+_routers_loaded = []
+_router_errors = []
+
+def _load(name: str, module_path: str, attr: str = "api_router"):
     try:
-        response = await call_next(request)
-    except Exception:
-        logger.exception("Unhandled exception rid=%s path=%s", request_id, request.url.path)
-        return JSONResponse(status_code=500, content={"ok": False, "code": "INTERNAL_ERROR", "message": "The service encountered a temporary error. No trading action was executed.", "recoverable": True, "request_id": request_id})
-    response.headers["x-request-id"] = request_id
-    return response
+        import importlib
+        mod = importlib.import_module(module_path)
+        router = getattr(mod, attr)
+        app.include_router(router)
+        _routers_loaded.append(name)
+    except Exception as e:
+        _router_errors.append(f"{name}: {e}")
+        logger.error("Failed to load router %s: %s", name, e)
 
-@app.exception_handler(RequestValidationError)
-async def validation_error_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"ok": False, "code": "INVALID_REQUEST", "message": "The request could not be processed.", "recoverable": True})
-
-# Core routers
-app.include_router(llm_router)
-app.include_router(chat_router)
-app.include_router(strategies_router)
-app.include_router(pipeline_router)
-app.include_router(wallet_router)
-app.include_router(broker_accounts_router)
-app.include_router(mt5_bridge_router)
-app.include_router(live_engine_router)
-app.include_router(paper_decision_router)
-app.include_router(strategy_compiler_router)
-# v2 Agent Team router
-app.include_router(live_trading_router)
+_load("auth",             "backend.routers.auth")
+_load("llm",              "backend.routers.llm")
+_load("chat",             "backend.routers.chat")
+_load("strategies",       "backend.routers.strategies")
+_load("pipeline_multi",   "backend.routers.pipeline_multi")
+_load("pipeline_mt5",     "backend.routers.pipeline_mt5")
+_load("wallet",           "backend.routers.wallet")
+_load("broker_accounts",  "backend.routers.broker_accounts")
+_load("mt5_bridge",       "backend.routers.mt5_bridge")
+_load("live_engine",      "backend.routers.live_engine")
+_load("paper_decision",   "backend.routers.paper_decision")
+_load("strategy_compiler","backend.routers.strategy_compiler")
+_load("live_trading",     "backend.routers.live_trading")
 
 @app.get("/")
 async def root():
-    return {"service": "ManiQuantAI API", "status": "ok", "version": "2.0.0", "agents": ["momentum", "mean_reversion", "breakout", "scalper", "sentiment", "portfolio_manager"]}
+    return {
+        "service": "ManiQuantAI API",
+        "status": "ok",
+        "version": "2.0.0",
+        "routers_loaded": _routers_loaded,
+        "router_errors": _router_errors,
+    }
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "maniquantai-api", "workflow": "deterministic", "live_engine": "enabled", "agent_team": "6-agent"}
+    return {
+        "status": "ok" if not _router_errors else "degraded",
+        "routers_loaded": _routers_loaded,
+        "router_errors": _router_errors,
+    }
