@@ -10,7 +10,7 @@ from .auth import get_current_user
 log = logging.getLogger("maniquantai.pipeline")
 api_router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 SB      = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
-ANON    = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_Uf0ECWKkKrH6pzedVbTOA_aNlp1J1X").strip()
+ANON    = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X").strip()
 SERVICE = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 def h(token: str) -> dict:
