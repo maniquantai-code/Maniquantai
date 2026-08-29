@@ -74,7 +74,7 @@ export function StrategyProvider({ children }: { children: ReactNode }) {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ strategy_id: strategyId, message: rawText }),
-    }).catch(() => {}); // fire-and-forget — chat panel will show the result
+    }); // fire-and-forget — chat panel will show the result
   }
 
   async function createStrategy(rawText: string) {

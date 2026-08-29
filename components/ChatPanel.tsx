@@ -60,7 +60,7 @@ export function ChatPanel({
 
   const persist = async (role: "user" | "assistant", content: string) => {
     if (!activeId || !content.trim()) return;
-    await supabase.from("chat_messages").insert({ strategy_id: activeId, role, content: content.trim() }).catch(() => {});
+    try { await supabase.from("chat_messages").insert({ strategy_id: activeId, role, content: content.trim() }); } catch { /* non-critical */ }
   };
 
   const addMsg = (role: "user" | "assistant", content: string, img?: string) => {
