@@ -5,19 +5,20 @@
   "installCommand": "npm install",
   "outputDirectory": ".next",
   "rewrites": [
-    { "source": "/api/chat", "destination": "/python/index.py" },
-    { "source": "/api/health", "destination": "/python/index.py" },
-    { "source": "/api/strategies/:path*", "destination": "/python/index.py" },
-    { "source": "/api/pipeline/:path*", "destination": "/python/index.py" },
-    { "source": "/api/mt5-bridge/:path*", "destination": "/python/index.py" },
-    { "source": "/api/broker-accounts/:path*", "destination": "/python/index.py" },
     { "source": "/api/broker-accounts", "destination": "/python/index.py" },
-    { "source": "/api/wallet/:path*", "destination": "/python/index.py" },
+    { "source": "/api/broker-accounts/:path*", "destination": "/python/index.py" },
     { "source": "/api/wallet", "destination": "/python/index.py" },
+    { "source": "/api/wallet/:path*", "destination": "/python/index.py" },
+    { "source": "/api/mt5-bridge/:path*", "destination": "/python/index.py" },
+    { "source": "/api/chat", "destination": "/python/index.py" },
+    { "source": "/api/pipeline/:path*", "destination": "/python/index.py" },
+    { "source": "/api/strategies", "destination": "/python/index.py" },
+    { "source": "/api/strategies/:path*", "destination": "/python/index.py" },
     { "source": "/api/live-trading/:path*", "destination": "/python/index.py" },
     { "source": "/api/live-engine/:path*", "destination": "/python/index.py" },
     { "source": "/api/paper-decision/:path*", "destination": "/python/index.py" },
+    { "source": "/api/llm/:path*", "destination": "/python/index.py" },
     { "source": "/api/strategy-compiler/:path*", "destination": "/python/index.py" },
-    { "source": "/api/llm/:path*", "destination": "/python/index.py" }
+    { "source": "/api/health", "destination": "/python/index.py" }
   ]
 }
