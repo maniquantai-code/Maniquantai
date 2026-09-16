@@ -1,0 +1,21 @@
+name: MT5 deterministic execution tests
+
+on:
+  push:
+    paths:
+      - 'mt5-bridge/**'
+  pull_request:
+    paths:
+      - 'mt5-bridge/**'
+
+jobs:
+  pure-execution-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run pure execution tests
+        working-directory: mt5-bridge
+        run: python -m unittest discover -s . -p 'test_*.py'
