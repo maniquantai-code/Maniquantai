@@ -4,15 +4,19 @@ export const dynamic = "force-dynamic";
 
 const BACKEND = (process.env.MANIQUANT_BACKEND_URL || process.env.BACKEND_API_URL || "").replace(/\/$/, "");
 
-async function forward(req: NextRequest, path: string[]) {
-  if (!BACKEND) {
-    return NextResponse.json(
-      { detail: "MANIQUANT_BACKEND_URL is not configured for market intelligence." },
-      { status: 503 },
-    );
-  }
+function localBackendUrl(req: NextRequest, path: string[]) {
+  const url = new URL("/api", req.url);
+  url.searchParams.set("__path", `/market-intelligence/${path.join("/")}`);
+  return url.toString();
+}
 
-  const target = `${BACKEND}/api/market-intelligence/${path.join("/")}${req.nextUrl.search}`;
+async function forward(req: NextRequest, path: string[]) {
+  // Prefer a separately deployed FastAPI backend when configured. Otherwise use
+  // the FastAPI function already deployed with this same Vercel project.
+  const target = BACKEND
+    ? `${BACKEND}/api/market-intelligence/${path.join("/")}${req.nextUrl.search}`
+    : localBackendUrl(req, path);
+
   const headers = new Headers();
   const auth = req.headers.get("authorization");
   if (auth) headers.set("authorization", auth);
@@ -32,7 +36,11 @@ async function forward(req: NextRequest, path: string[]) {
     });
   } catch (error) {
     return NextResponse.json(
-      { detail: "Market intelligence backend unavailable", error: String(error) },
+      {
+        detail: "Market intelligence backend unavailable",
+        error: String(error),
+        backend: BACKEND ? "external" : "same-vercel-project",
+      },
       { status: 502 },
     );
   }
