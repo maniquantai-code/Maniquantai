@@ -9,10 +9,11 @@ from .live_engine import api_router as live_engine_router
 from .paper_decision import api_router as paper_decision_router
 from .strategy_compiler import api_router as strategy_compiler_router
 from .live_trading import api_router as live_trading_router
+from .market_intelligence import api_router as market_intelligence_router
 
 __all__ = [
     "llm_router", "chat_router", "strategies_router", "pipeline_router",
     "wallet_router", "broker_accounts_router", "mt5_bridge_router",
     "live_engine_router", "paper_decision_router", "strategy_compiler_router",
-    "live_trading_router",
+    "live_trading_router", "market_intelligence_router",
 ]
