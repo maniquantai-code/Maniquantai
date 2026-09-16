@@ -30,7 +30,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import routers one by one — if one fails, others still work
 _routers_loaded = []
 _router_errors = []
 
@@ -58,6 +57,7 @@ _load("live_engine",      "backend.routers.live_engine")
 _load("paper_decision",   "backend.routers.paper_decision")
 _load("strategy_compiler","backend.routers.strategy_compiler")
 _load("live_trading",     "backend.routers.live_trading")
+_load("market_intelligence", "backend.routers.market_intelligence")
 
 @app.get("/")
 async def root():
