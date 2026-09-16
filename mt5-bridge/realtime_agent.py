@@ -29,11 +29,7 @@ TIMEFRAMES = {"1m": mt5.TIMEFRAME_M1, "5m": mt5.TIMEFRAME_M5, "15m": mt5.TIMEFRA
 
 
 def client() -> httpx.Client:
-    return httpx.Client(
-        timeout=httpx.Timeout(HTTP_TIMEOUT, connect=5),
-        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "ManiQuantAI-MT5-Bridge/3.0"},
-    )
+    return httpx.Client(timeout=httpx.Timeout(HTTP_TIMEOUT, connect=5), limits=httpx.Limits(max_connections=20, max_keepalive_connections=10), headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "ManiQuantAI-MT5-Bridge/3.1"})
 
 
 def initialize_mt5() -> None:
@@ -61,13 +57,22 @@ def account_snapshot() -> dict[str, Any]:
 
 
 def post(c: httpx.Client, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    r = c.post(f"{API}{path}", json=payload)
+    body = dict(payload)
+    # The execution completion/failure endpoints require the bridge token in
+    # the request body; the shared Authorization header alone is not enough.
+    if path.startswith("/api/mt5-bridge/execution/") and (path.endswith("/complete") or path.endswith("/fail")):
+        body.setdefault("token", TOKEN)
+    r = c.post(f"{API}{path}", json=body)
     r.raise_for_status()
     return r.json()
 
 
 def get(c: httpx.Client, path: str, **params: Any) -> dict[str, Any]:
-    r = c.get(f"{API}{path}", params=params)
+    query = dict(params)
+    # The current /jobs contract authenticates with the token query parameter.
+    if path == "/api/mt5-bridge/jobs":
+        query.setdefault("token", TOKEN)
+    r = c.get(f"{API}{path}", params=query)
     r.raise_for_status()
     return r.json()
 
@@ -93,7 +98,6 @@ def _risk_volume(symbol: str, stop_distance: float, risk_pct: float) -> float:
     step = float(info.volume_step or info.volume_min or 0.01)
     if raw < vmin or step <= 0:
         return 0.0
-    # Round down so a broker never receives more risk than the requested cap.
     sized = (raw // step) * step
     return min(vmax, max(vmin, sized))
 
@@ -104,7 +108,8 @@ def _bars(symbol: str, timeframe: str):
     rates = mt5.copy_rates_from_pos(symbol, TIMEFRAMES[timeframe], 0, 300)
     if rates is None or len(rates) < 60:
         return None
-    # Deliberately exclude the currently forming candle.
+    # Exclude the currently forming candle. Every decision is based on a
+    # completed candle so a signal cannot flip while a candle is forming.
     return [{"time": int(x["time"]), "open": float(x["open"]), "high": float(x["high"]), "low": float(x["low"]), "close": float(x["close"]), "tick_volume": int(x["tick_volume"])} for x in rates[:-1]]
 
 
@@ -140,7 +145,6 @@ def evaluate(strategy: dict[str, Any]) -> dict[str, Any] | None:
     if MAX_SPREAD_POINTS and spread_points > MAX_SPREAD_POINTS:
         return None
 
-    # Close signals do not need new risk sizing.
     if signal.side.startswith("close_"):
         ptype = mt5.POSITION_TYPE_BUY if signal.side == "close_buy" else mt5.POSITION_TYPE_SELL
         p = next((p for p in ps if int(p.type) == ptype), None)
@@ -262,7 +266,7 @@ def main() -> None:
                 ensure_mt5()
                 if now - last_heartbeat >= HEARTBEAT_SECONDS:
                     acct = account_snapshot()
-                    post(c, "/api/mt5-bridge/heartbeat", {"symbol": "", "bid": 0, "ask": 0, "account_login": acct.get("login", 0), "server": acct.get("server", ""), "equity": acct.get("equity", 0), "balance": acct.get("balance", 0), "bridge_version": "3.0-deterministic", "scan_interval_ms": int(SCAN_SECONDS * 1000)})
+                    post(c, "/api/mt5-bridge/heartbeat", {"symbol": "", "bid": 0, "ask": 0, "account_login": acct.get("login", 0), "server": acct.get("server", ""), "equity": acct.get("equity", 0), "balance": acct.get("balance", 0), "bridge_version": "3.1-deterministic", "scan_interval_ms": int(SCAN_SECONDS * 1000)})
                     last_heartbeat = now
                 if now - last_scan >= SCAN_SECONDS:
                     data = get(c, "/api/mt5-bridge/live-strategies")
