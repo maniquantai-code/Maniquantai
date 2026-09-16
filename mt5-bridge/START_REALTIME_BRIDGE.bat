@@ -3,13 +3,20 @@ setlocal
 cd /d %~dp0
 
 echo ================================================
-echo   ManiQuantAI Realtime MT5 Bridge v2
- echo ================================================
+echo   ManiQuantAI Realtime MT5 Bridge v2.1
+echo ================================================
+
 if not exist .venv\Scripts\python.exe (
   echo Creating Python environment...
   py -3 -m venv .venv
+  if errorlevel 1 (
+    echo Could not create Python environment. Install Python 3.11+ first.
+    pause
+    exit /b 1
+  )
 )
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+.venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements.txt
 if errorlevel 1 (
   echo Failed to install bridge dependencies.
   pause
@@ -17,12 +24,23 @@ if errorlevel 1 (
 )
 
 echo.
-echo Required environment variables:
-echo   MANIQUANT_API=https://your-api-host
+echo Configure these environment variables before starting:
+echo   MANIQUANT_API=https://your-maniquantai-api
  echo   MT5_BRIDGE_TOKEN=your-bridge-token
- echo Optional:
-echo   MT5_LOGIN / MT5_PASSWORD / MT5_SERVER
- echo   MT5_BRIDGE_SCAN_SECONDS=0.5
+ echo Optional account login: MT5_LOGIN / MT5_PASSWORD / MT5_SERVER
+ echo Optional tuning: MT5_BRIDGE_SCAN_SECONDS, MT5_BRIDGE_HEARTBEAT_SECONDS
+ echo Optional risk guard: MT5_MAX_SPREAD_POINTS
  echo.
+
+if "%MANIQUANT_API%"=="" (
+  echo WARNING: MANIQUANT_API is not set in this terminal.
+)
+if "%MT5_BRIDGE_TOKEN%"=="" (
+  echo WARNING: MT5_BRIDGE_TOKEN is not set in this terminal.
+)
+
+echo Starting realtime bridge...
 .venv\Scripts\python.exe realtime_agent.py
+
+if errorlevel 1 echo Bridge stopped with an error.
 pause
