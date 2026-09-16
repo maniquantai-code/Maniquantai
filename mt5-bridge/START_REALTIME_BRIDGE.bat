@@ -30,7 +30,7 @@ echo   MT5_BRIDGE_TOKEN=your-bridge-token
 echo Optional account login: MT5_LOGIN / MT5_PASSWORD / MT5_SERVER
 echo Optional tuning: MT5_BRIDGE_SCAN_SECONDS, MT5_BRIDGE_HEARTBEAT_SECONDS
 echo Optional risk guard: MT5_MAX_SPREAD_POINTS
- echo.
+echo.
 
 if "%MANIQUANT_API%"=="" (
   echo WARNING: MANIQUANT_API is not set in this terminal.
