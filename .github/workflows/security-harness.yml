@@ -15,4 +15,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r backend/requirements.txt pytest
-      - run: pytest -q backend/tests/test_execution_harness.py
+      - run: PYTHONPATH=. pytest -q backend/tests/test_execution_harness.py
