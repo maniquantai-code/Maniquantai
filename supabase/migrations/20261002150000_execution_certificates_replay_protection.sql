@@ -48,7 +48,7 @@ set search_path = public
 as $$
   select encode(
     digest(
-      concat_ws(
+      convert_to(concat_ws(
         chr(31),
         coalesce(strategy_id::text, ''),
         coalesce(raw_strategy_text, ''),
@@ -56,7 +56,7 @@ as $$
         coalesce(live_timeframe, ''),
         coalesce(updated_at::text, ''),
         coalesce(live_approved::text, '')
-      ),
+      ), 'utf8'),
       'sha256'
     ),
     'hex'
