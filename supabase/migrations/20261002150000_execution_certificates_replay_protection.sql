@@ -95,7 +95,7 @@ begin
     'timeframe', coalesce(s.live_timeframe, '15m'),
     'live_approved', coalesce(s.live_approved, false),
     'updated_at', s.updated_at,
-    'snapshot_hash', public.mt5_strategy_snapshot_hash(s.strategy_id),
+    'snapshot_hash', public.mt5_strategy_snapshot_hash(s.strategy_id)
   ) order by s.created_at desc), '[]'::jsonb)
   into v_rows
   from public.strategies s
