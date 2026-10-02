@@ -17,7 +17,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 api_router = APIRouter(prefix="/api/mt5-bridge", tags=["live-engine"])
-SB = os.getenv("SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co").rstrip("/")
+SB = os.getenv("SUPABASE_URL", "").rstrip("/")
 ANON = (os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY") or "").strip()
 PEPPER = os.getenv("MT5_BRIDGE_PEPPER", "").strip()
 
@@ -57,11 +57,11 @@ class SignalRequest(BaseModel):
     volume: float = Field(gt=0)
     stop_loss: float | None = None
     take_profit: float | None = None
-    risk_percent: float | None = Field(default=None, ge=0, le=5)
+    risk_percent: float | None = Field(default=None, gt=0, le=2)
     deviation: int = Field(default=20, ge=0, le=500)
     magic: int = Field(default=260821, ge=1)
     reason: str = Field(min_length=1, max_length=500)
-    signal_key: str = Field(min_length=8, max_length=160)
+    signal_key: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 @api_router.get("/live-strategies")
@@ -74,9 +74,15 @@ async def live_strategies(authorization: str | None = Header(default=None)):
 @api_router.post("/live-signal")
 async def live_signal(req: SignalRequest, authorization: str | None = Header(default=None)):
     token = _token(authorization)
+    if not SB:
+        raise HTTPException(503, "Supabase URL is not configured")
     side = req.side.lower()
     if side not in {"buy", "sell", "close", "close_buy", "close_sell"}:
         raise HTTPException(400, "Unsupported live signal side")
+    if side in {"buy", "sell"} and (req.stop_loss is None or req.take_profit is None):
+        raise HTTPException(422, "Protective stop-loss and take-profit are required for entry signals")
+    if req.risk_percent is None and side in {"buy", "sell"}:
+        raise HTTPException(422, "risk_percent is required for entry signals")
     body = req.model_dump()
     body["symbol"] = req.symbol.upper()
     job_id = await _rpc("mt5_queue_live_signal", {
