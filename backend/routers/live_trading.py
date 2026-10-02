@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from .auth import get_current_user
 from ..core.agent_team import run_agent_team
+from ..core.execution_harness import HarnessReject, validate_execution_request
 
 api_router = APIRouter(prefix="/api/live-trading", tags=["live-trading"])
 
@@ -154,6 +155,32 @@ async def _queue_execution(uid: str, sid: str, token: str, decision: dict, symbo
     if not r.is_success:
         return None
     return r.json()
+
+
+async def _execution_control(uid: str, sid: str, token: str) -> dict:
+    async with httpx.AsyncClient(timeout=10) as c:
+        r = await c.get(
+            f"{SB}/rest/v1/execution_controls",
+            headers=_h(token),
+            params={"user_id": f"eq.{uid}", "strategy_id": f"eq.{sid}", "select": "kill_switch,max_open_positions,daily_loss_limit_pct", "limit": "1"},
+        )
+    if r.is_success and r.json():
+        return r.json()[0]
+    return {"kill_switch": False, "max_open_positions": MAX_POSITIONS, "daily_loss_limit_pct": -5.0}
+
+
+async def _audit_execution(uid: str, sid: str, token: str, *, signal_key: str, action: str,
+                           symbol: str, timeframe: str, result: dict, checks: tuple[str, ...],
+                           reason: str) -> None:
+    payload = {
+        "user_id": uid, "strategy_id": sid, "signal_key": signal_key,
+        "action": action, "symbol": symbol.upper(), "timeframe": timeframe,
+        "side": result.get("side"), "consensus": result.get("consensus"),
+        "risk_pct": result.get("risk_pct"), "reason": reason[:500],
+        "checks": list(checks),
+    }
+    async with httpx.AsyncClient(timeout=10) as c:
+        await c.post(f"{SB}/rest/v1/execution_audit", headers=_h(token), json=payload)
 
 
 async def _log_agent_scan(sid: str, uid: str, token: str, result: dict) -> None:
@@ -286,12 +313,38 @@ async def execute_signal(req: LiveScanRequest, user=Depends(get_current_user)):
     await _log_agent_scan(req.strategy_id, uid, token, result)
 
     job_id = None
-    if result["execute"] and result.get("side") in {"buy", "sell"}:
-        # Deduplicate by last bar timestamp
-        last_ts = bars[-1].get("ts", bars[-1].get("time", 0))
-        signal_key = f"{req.strategy_id}-{req.symbol}-{result['side']}-{last_ts}"
-
-        job_id = await _queue_execution(uid, req.strategy_id, token, result, req.symbol, req.timeframe, signal_key)
+    if result.get("execute") and result.get("side") in {"buy", "sell"}:
+        controls = await _execution_control(uid, req.strategy_id, token)
+        try:
+            gate = validate_execution_request(
+                strategy=strategy, spec=spec, result=result,
+                symbol=req.symbol, timeframe=req.timeframe, bars=bars,
+                account_equity=req.account_equity, current_position=req.current_position,
+                bridge_online=True,
+                daily_pnl_pct=None,
+                open_position_count=0,
+                kill_switch=bool(controls.get("kill_switch")),
+            )
+        except HarnessReject as exc:
+            signal_key = hashlib.sha256(
+                f"{req.strategy_id}|{req.symbol}|{req.timeframe}|rejected|{bars[-1].get('ts', bars[-1].get('time', ''))}".encode()
+            ).hexdigest()
+            await _audit_execution(
+                uid, req.strategy_id, token, signal_key=signal_key, action="rejected",
+                symbol=req.symbol, timeframe=req.timeframe, result=result, checks=(),
+                reason=str(exc),
+            )
+            result = {**result, "execute": False, "harness_rejected": True, "reason": str(exc)}
+        else:
+            signal_key = gate.signal_key
+            job_id = await _queue_execution(uid, req.strategy_id, token, result, req.symbol, req.timeframe, signal_key)
+            await _audit_execution(
+                uid, req.strategy_id, token, signal_key=signal_key,
+                action="queued" if job_id else "rejected",
+                symbol=req.symbol, timeframe=req.timeframe, result=result,
+                checks=gate.checks,
+                reason=gate.reason if job_id else "Execution queue rejected the request",
+            )
 
     return {
         "ok": True,
