@@ -6,8 +6,10 @@ latest completed candle, and submits approved execution jobs to MT5.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -273,6 +275,17 @@ def main() -> None:
                     for strategy in data.get("strategies", []):
                         signal = evaluate(strategy)
                         if signal and signal["signal_key"] not in seen:
+                            certificate = str(strategy.get("execution_certificate") or "")
+                            snapshot_hash = str(strategy.get("execution_snapshot_hash") or "")
+                            if not certificate or len(snapshot_hash) != 64:
+                                print("Signal blocked: execution certificate missing for", strategy.get("name"))
+                                continue
+                            signal["signal_key"] = hashlib.sha256(
+                                f"{signal['strategy_id']}|{signal['symbol']}|{signal['timeframe']}|{signal['side']}|{signal.get('candle_time', 0)}".encode()
+                            ).hexdigest()
+                            signal["execution_certificate"] = certificate
+                            signal["execution_snapshot_hash"] = snapshot_hash
+                            signal["execution_nonce"] = str(uuid.uuid4())
                             result = post(c, "/api/mt5-bridge/live-signal", signal)
                             print("Signal:", strategy.get("name"), result)
                             seen[signal["signal_key"]] = now

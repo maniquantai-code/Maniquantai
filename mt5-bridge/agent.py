@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -120,11 +121,11 @@ def evaluate_strategy(strategy: dict) -> dict | None:
         if volume<=0:
             print(f"Signal detected for {sid}, but no explicit execution volume is configured; order blocked.")
             return None
-        return {"strategy_id":sid,"symbol":symbol,"timeframe":tf,"side":"buy","volume":volume,"stop_loss":sl or None,"take_profit":tp or None,"risk_percent":float(parsed.get("risk_pct",0) or 0),"reason":f"RSI {rr[idx]:.2f} < {entry_rsi:g} and candle low touched lower Bollinger Band","signal_key":f"{sid}:{candle_time}:buy"}
+        return {"strategy_id":sid,"symbol":symbol,"timeframe":tf,"side":"buy","volume":volume,"stop_loss":sl or None,"take_profit":tp or None,"risk_percent":float(parsed.get("risk_pct",0) or 0),"reason":f"RSI {rr[idx]:.2f} < {entry_rsi:g} and candle low touched lower Bollinger Band","signal_key":hashlib.sha256(f"{sid}|{symbol}|{tf}|buy|{candle_time}".encode()).hexdigest(),"candle_time":candle_time}
     # Exit: close the existing long position rather than opening a new short.
     if has_long and rr[idx] >= exit_rsi:
         p=next(p for p in positions if int(p.type)==mt5.POSITION_TYPE_BUY)
-        return {"strategy_id":sid,"symbol":symbol,"timeframe":tf,"side":"close_buy","volume":float(p.volume),"stop_loss":None,"take_profit":None,"risk_percent":0,"reason":f"RSI {rr[idx]:.2f} >= {exit_rsi:g}","signal_key":f"{sid}:{candle_time}:close_buy"}
+        return {"strategy_id":sid,"symbol":symbol,"timeframe":tf,"side":"close_buy","volume":float(p.volume),"stop_loss":None,"take_profit":None,"risk_percent":0,"reason":f"RSI {rr[idx]:.2f} >= {exit_rsi:g}","signal_key":hashlib.sha256(f"{sid}|{symbol}|{tf}|close_buy|{candle_time}".encode()).hexdigest(),"candle_time":candle_time}
     return None
 
 
@@ -134,6 +135,14 @@ def scan_live() -> None:
         try:
             signal=evaluate_strategy(strategy)
             if signal:
+                certificate = str(strategy.get("execution_certificate") or "")
+                snapshot_hash = str(strategy.get("execution_snapshot_hash") or "")
+                if not certificate or len(snapshot_hash) != 64:
+                    print("Live signal blocked: execution certificate missing")
+                    continue
+                signal["execution_certificate"] = certificate
+                signal["execution_snapshot_hash"] = snapshot_hash
+                signal["execution_nonce"] = str(uuid.uuid4())
                 result=api_post("/api/mt5-bridge/live-signal",signal)
                 print("Live signal:",strategy.get("name"),result)
         except Exception as exc:

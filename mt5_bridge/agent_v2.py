@@ -12,9 +12,11 @@ Run via bridge_app.py (Tkinter GUI) or standalone:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -323,7 +325,12 @@ def _run_strategy_scan(
 
     # Build signal_key from last bar timestamp
     last_ts = bars[-1].get("ts", bars[-1].get("time", 0))
-    signal_key = f"{sid[:16]}-{symbol}-{side}-{last_ts}"
+    certificate = str(strategy.get("execution_certificate") or "")
+    snapshot_hash = str(strategy.get("execution_snapshot_hash") or "")
+    if not certificate or len(snapshot_hash) != 64:
+        log.warning("Execution certificate missing/expired for strategy %s", sid[:8])
+        return
+    signal_key = hashlib.sha256(f"{sid}|{symbol}|{tf_str}|{side}|{last_ts}".encode()).hexdigest()
 
     try:
         _post(api, token, "/api/mt5-bridge/live-signal", {
@@ -337,6 +344,9 @@ def _run_strategy_scan(
             "risk_percent": result.get("risk_pct", 1.0),
             "reason":       (result.get("reason") or "")[:500],
             "signal_key":   signal_key,
+            "execution_certificate": certificate,
+            "execution_snapshot_hash": snapshot_hash,
+            "execution_nonce": str(uuid.uuid4()),
             "deviation":    20,
             "magic":        magic,
         })
