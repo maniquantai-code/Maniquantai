@@ -6,12 +6,13 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from backend.core.security import SecurityMiddleware
 from fastapi.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("maniquantai")
 
-app = FastAPI(title="ManiQuantAI API", version="2.0.0")
+app = FastAPI(title="ManiQuantAI API", version="2.0.0", docs_url=None if os.getenv("DISABLE_API_DOCS", "false").lower() == "true" else "/docs")
 
 origins = [
     "https://maniquantai.vercel.app",
@@ -22,12 +23,15 @@ extra = os.getenv("FRONTEND_URL")
 if extra:
     origins.append(extra.rstrip("/"))
 
+app.add_middleware(SecurityMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=sorted(set(origins)),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    max_age=600,
 )
 
 _routers_loaded = []
