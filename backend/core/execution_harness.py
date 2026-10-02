@@ -110,8 +110,14 @@ def validate_execution_request(
     if open_position_count >= int(spec.get("max_open_positions", 1)):
         _fail("Maximum open positions reached")
 
-    if daily_pnl_pct is not None and _finite(daily_pnl_pct, "daily_pnl_pct") <= float(spec.get("daily_loss_limit_pct", -5.0)):
-        _fail("Daily loss limit reached")
+    if daily_pnl_pct is not None:
+        daily_limit = _finite(spec.get("daily_loss_limit_pct", -5.0), "daily_loss_limit_pct")
+        # Strategy compiler historically stores this as a positive loss magnitude
+        # (5.0), while execution_controls stores the threshold as -5.0.
+        if daily_limit > 0:
+            daily_limit = -daily_limit
+        if daily_pnl_pct <= daily_limit:
+            _fail("Daily loss limit reached")
 
     sl = result.get("stop_loss")
     tp = result.get("take_profit")
