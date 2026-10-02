@@ -56,7 +56,6 @@ as $$
         coalesce(live_timeframe, ''),
         coalesce(updated_at::text, ''),
         coalesce(live_approved::text, ''),
-        coalesce(live_paused::text, '')
       ),
       'sha256'
     ),
@@ -95,7 +94,6 @@ begin
     'symbol', coalesce(s.live_symbol, ''),
     'timeframe', coalesce(s.live_timeframe, '15m'),
     'live_approved', coalesce(s.live_approved, false),
-    'live_paused', coalesce(s.live_paused, false),
     'updated_at', s.updated_at,
     'snapshot_hash', public.mt5_strategy_snapshot_hash(s.strategy_id),
   ) order by s.created_at desc), '[]'::jsonb)
@@ -103,8 +101,7 @@ begin
   from public.strategies s
   where s.user_id=v_user
     and coalesce(s.live_approved,false)=true
-    and coalesce(s.live_paused,false)=false;
-
+;
   return v_rows;
 end
 $$;
@@ -128,7 +125,6 @@ declare
   v_user uuid;
   v_current_hash text;
   v_approved boolean;
-  v_paused boolean;
 begin
   select user_id into v_user
   from public.broker_accounts
@@ -144,13 +140,13 @@ begin
     raise exception 'Invalid certificate expiry';
   end if;
 
-  select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false), coalesce(live_paused,false)
+  select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false)
   into v_current_hash, v_approved, v_paused
   from public.strategies
   where strategy_id=p_strategy_id and user_id=v_user;
 
   if v_current_hash is null then raise exception 'Strategy not found'; end if;
-  if not v_approved or v_paused then raise exception 'Strategy is not live approved'; end if;
+  if not v_approved then raise exception 'Strategy is not live approved'; end if;
   if v_current_hash <> p_snapshot_hash then raise exception 'Strategy snapshot changed'; end if;
   if p_certificate_hash !~ '^[0-9a-f]{64}$' then raise exception 'Invalid certificate hash'; end if;
 
@@ -222,13 +218,13 @@ begin
   if v_cert.certificate_hash <> p_certificate_hash then raise exception 'Execution certificate mismatch'; end if;
   if v_cert.snapshot_hash <> p_snapshot_hash then raise exception 'Execution certificate snapshot mismatch'; end if;
 
-  select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false), coalesce(live_paused,false)
+  select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false)
   into v_current_hash, v_approved, v_paused
   from public.strategies
   where strategy_id=p_strategy_id and user_id=v_user;
 
   if v_current_hash is null then raise exception 'Strategy not found'; end if;
-  if not v_approved or v_paused then raise exception 'Strategy is not live approved'; end if;
+  if not v_approved then raise exception 'Strategy is not live approved'; end if;
   if v_current_hash <> p_snapshot_hash then raise exception 'Strategy changed after certificate issuance'; end if;
 
   insert into public.execution_replays(nonce,strategy_id,user_id,signal_key)
