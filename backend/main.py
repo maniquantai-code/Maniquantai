@@ -62,6 +62,7 @@ _load("paper_decision",   "backend.routers.paper_decision")
 _load("strategy_compiler","backend.routers.strategy_compiler")
 _load("live_trading",     "backend.routers.live_trading")
 _load("market_intelligence", "backend.routers.market_intelligence")
+_load("agent_skills", "backend.routers.agent_skills")
 
 @app.get("/")
 async def root():
