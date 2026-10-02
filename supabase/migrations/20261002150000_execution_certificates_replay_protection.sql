@@ -55,7 +55,7 @@ as $$
         coalesce(live_symbol, ''),
         coalesce(live_timeframe, ''),
         coalesce(updated_at::text, ''),
-        coalesce(live_approved::text, ''),
+        coalesce(live_approved::text, '')
       ),
       'sha256'
     ),
