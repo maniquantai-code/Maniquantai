@@ -193,7 +193,6 @@ declare
   v_cert public.execution_certificates%rowtype;
   v_current_hash text;
   v_approved boolean;
-  v_paused boolean;
 begin
   select user_id into v_user
   from public.broker_accounts
@@ -219,7 +218,7 @@ begin
   if v_cert.snapshot_hash <> p_snapshot_hash then raise exception 'Execution certificate snapshot mismatch'; end if;
 
   select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false)
-  into v_current_hash, v_approved, v_paused
+  into v_current_hash, v_approved
   from public.strategies
   where strategy_id=p_strategy_id and user_id=v_user;
 
