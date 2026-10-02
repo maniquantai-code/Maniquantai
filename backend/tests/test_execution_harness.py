@@ -71,3 +71,26 @@ def test_harness_rejects_kill_switch():
             account_equity=10000, current_position="flat", bridge_online=True,
             kill_switch=True,
         )
+
+
+def test_positive_daily_loss_magnitude_is_normalized():
+    strategy, spec, result, bars = _valid()
+    spec["daily_loss_limit_pct"] = 5.0
+    result["consensus"] = 0.8
+    out = validate_execution_request(
+        strategy=strategy, spec=spec, result=result, symbol="BTCUSD",
+        timeframe="15m", bars=bars, account_equity=10000,
+        current_position="flat", bridge_online=True, daily_pnl_pct=-4.0,
+    )
+    assert out.allowed is True
+
+
+def test_positive_daily_loss_magnitude_still_blocks_at_limit():
+    strategy, spec, result, bars = _valid()
+    spec["daily_loss_limit_pct"] = 5.0
+    with pytest.raises(HarnessReject, match="Daily loss limit"):
+        validate_execution_request(
+            strategy=strategy, spec=spec, result=result, symbol="BTCUSD",
+            timeframe="15m", bars=bars, account_equity=10000,
+            current_position="flat", bridge_online=True, daily_pnl_pct=-5.0,
+        )
