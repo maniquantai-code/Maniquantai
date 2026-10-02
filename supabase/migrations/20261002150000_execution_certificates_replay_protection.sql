@@ -98,7 +98,6 @@ begin
     'live_paused', coalesce(s.live_paused, false),
     'updated_at', s.updated_at,
     'snapshot_hash', public.mt5_strategy_snapshot_hash(s.strategy_id),
-    'spec', coalesce(s.spec, '{}'::jsonb)
   ) order by s.created_at desc), '[]'::jsonb)
   into v_rows
   from public.strategies s
