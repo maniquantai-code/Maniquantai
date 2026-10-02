@@ -157,6 +157,26 @@ async def _queue_execution(uid: str, sid: str, token: str, decision: dict, symbo
     return r.json()
 
 
+async def _risk_snapshot(uid: str, sid: str, token: str) -> tuple[float | None, int]:
+    """Read live risk state through the user's RLS-scoped session."""
+    async with httpx.AsyncClient(timeout=10) as c:
+        pnl_r = await c.get(
+            f"{SB}/rest/v1/daily_pnl",
+            headers=_h(token),
+            params={"user_id": f"eq.{uid}", "strategy_id": f"eq.{sid}", "trading_date": f"eq.{datetime.now(timezone.utc).date().isoformat()}", "select": "pnl_pct", "limit": "1"},
+        )
+        pos_r = await c.get(
+            f"{SB}/rest/v1/live_positions",
+            headers=_h(token),
+            params={"user_id": f"eq.{uid}", "strategy_id": f"eq.{sid}", "status": "eq.open", "select": "id"},
+        )
+    pnl = None
+    if pnl_r.is_success and pnl_r.json():
+        pnl = pnl_r.json()[0].get("pnl_pct")
+    open_count = len(pos_r.json()) if pos_r.is_success and isinstance(pos_r.json(), list) else 0
+    return pnl, open_count
+
+
 async def _execution_control(uid: str, sid: str, token: str) -> dict:
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.get(
@@ -315,14 +335,15 @@ async def execute_signal(req: LiveScanRequest, user=Depends(get_current_user)):
     job_id = None
     if result.get("execute") and result.get("side") in {"buy", "sell"}:
         controls = await _execution_control(uid, req.strategy_id, token)
+        daily_pnl_pct, open_position_count = await _risk_snapshot(uid, req.strategy_id, token)
         try:
             gate = validate_execution_request(
                 strategy=strategy, spec=spec, result=result,
                 symbol=req.symbol, timeframe=req.timeframe, bars=bars,
                 account_equity=req.account_equity, current_position=req.current_position,
                 bridge_online=True,
-                daily_pnl_pct=None,
-                open_position_count=0,
+                daily_pnl_pct=daily_pnl_pct,
+                open_position_count=open_position_count,
                 kill_switch=bool(controls.get("kill_switch")),
             )
         except HarnessReject as exc:
