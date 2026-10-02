@@ -1,4 +1,5 @@
 name: ManiQuantAI Security Harness
+# CI trigger: execution hardening
 
 on:
   push:
