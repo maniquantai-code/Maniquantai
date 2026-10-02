@@ -141,7 +141,7 @@ begin
   end if;
 
   select public.mt5_strategy_snapshot_hash(strategy_id), coalesce(live_approved,false)
-  into v_current_hash, v_approved, v_paused
+  into v_current_hash, v_approved
   from public.strategies
   where strategy_id=p_strategy_id and user_id=v_user;
 
