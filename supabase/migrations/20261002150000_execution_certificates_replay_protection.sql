@@ -47,7 +47,7 @@ language sql stable security invoker
 set search_path = public
 as $$
   select encode(
-    digest(
+    extensions.digest(
       convert_to(concat_ws(
         chr(31),
         coalesce(strategy_id::text, ''),
