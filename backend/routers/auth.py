@@ -14,9 +14,10 @@ bearer_scheme = HTTPBearer(auto_error=False)
 SUPABASE_URL = os.getenv(
     "SUPABASE_URL", "https://zuimeyynaarjsovnqilk.supabase.co"
 ).rstrip("/")
-SUPABASE_ANON_KEY = os.getenv(
-    "SUPABASE_ANON_KEY",
-    "sb_publishable_Uf0ECWKVkKrH6pzedVbTOA_aNlp1J1X",
+SUPABASE_ANON_KEY = (
+    os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+    or ""
 ).strip()
 
 
@@ -30,6 +31,8 @@ async def get_current_user(
         )
 
     token = credentials.credentials.strip()
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise HTTPException(status_code=503, detail="Authentication service is not configured")
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{SUPABASE_URL}/auth/v1/user",
