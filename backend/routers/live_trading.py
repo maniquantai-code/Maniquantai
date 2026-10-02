@@ -180,7 +180,7 @@ async def _audit_execution(uid: str, sid: str, token: str, *, signal_key: str, a
         "checks": list(checks),
     }
     async with httpx.AsyncClient(timeout=10) as c:
-        await c.post(f"{SB}/rest/v1/execution_audit", headers=_h(token), json=payload)
+        await c.post(f"{SB}/rest/v1/execution_audit", headers={**_h(token), "Prefer": "resolution=ignore-duplicates,return=minimal"}, json=payload)
 
 
 async def _log_agent_scan(sid: str, uid: str, token: str, result: dict) -> None:
