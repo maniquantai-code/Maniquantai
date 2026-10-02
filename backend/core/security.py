@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from collections import defaultdict, deque
 
 from fastapi import Request
@@ -43,5 +44,5 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["Cache-Control"] = "no-store" if request.url.path.startswith("/api") else response.headers.get("Cache-Control", "public, max-age=0")
-        response.headers["X-Request-ID"] = request.headers.get("x-request-id", "")
+        response.headers["X-Request-ID"] = request.headers.get("x-request-id") or str(uuid.uuid4())
         return response
